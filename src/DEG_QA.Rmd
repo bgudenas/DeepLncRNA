@@ -1,0 +1,246 @@
+---
+title: "Fractionated RNAseq data QA"
+author: "Brian Gudenas"
+date: "June 22, 2017"
+output: html_document
+---
+#Here we perform quality assessment of the frationated RNA-seq samples
+The data we begin with is from right after differential expression analysis (DESeq2). In our DESeq2 model we controlled for the covariates of:
+
+1. Cell type
+2. Library creation method
+3. Sequencing Platform
+
+While contrasting the nuclear samples versus the cytosolic (nuclear/cytosolic)
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/Brian/Documents/Localization")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Tximport, eval=FALSE}
+library(GenomicFeatures)
+library(DESeq2)
+library(tximport)
+library(readr)
+library(stringr)
+
+samples = read_tsv("./Data/Meta/metadata.tsv")
+colnames(samples) = make.names(colnames(samples))
+Pair = read.table("./Data/Meta/Pair_map.txt", sep="\t", header = TRUE)
+
+samples = samples[!is.na(match(samples$File.accession, Pair$Pair1)), ]
+
+samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" | samples$Biosample.subcellular.fraction.term.name == "cytosol", ]
+
+files = file.path("./Data/quants", paste0(samples$File.accession, "_quant"), "quant.sf")
+
+txdb <- makeTxDbFromGFF("./Data/Annotation/gencode.v26.annotation.gtf.gz")
+k <- keys(txdb, keytype = "GENEID")
+df <- select(txdb, keys = k, keytype = "GENEID", columns = "TXNAME")
+tx2gene =df[ , c(2,2)]
+tx2gene$TXNAME.1 = unlist(lapply(str_split(tx2gene$TXNAME.1, "\\."), "[[", 1))
+head(tx2gene)
+
+txi.salmon =tximport(files, type="salmon", tx2gene = tx2gene, reader = read_tsv)
+
+samples$Biosample.subcellular.fraction.term.name = droplevels(samples$Biosample.subcellular.fraction.term.name)
+samples$Platform = droplevels(samples$Platform)
+colnames(samples)[colnames(samples) == "Biosample.subcellular.fraction.term.name"] = "Localization"
+
+## re-name poly-A samples which had an NA for library.depleted method
+samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
+samples$Lib_method = paste0(samples$Library.made.from, samples$Library.depleted.in)
+
+#Check to see we have the right 3 lib types (poly-A, total RNA and poly-A-depleted)
+table(samples$Lib_method)
+# create factor to represent platform and read-length
+samples$Run = paste0(samples$Platform, samples$Read.length)
+
+## include cell type, Lib method and Platform method as confounders
+dds = DESeqDataSetFromTximport(txi.salmon, samples, design = ~ Biosample.term.name + Lib_method + Platform + Localization)
+dds_DE =DESeq(dds)
+
+##contrast takes 3 args: name of variable, factor level of numerator and factor level of denominator 
+res05 =results(dds_DE, alpha = 0.05, contrast = c("Localization","nucleus","cytosol"))
+
+rld <- rlog(dds, blind=FALSE)
+
+save.image("./Data/DEG.RData")
+```
+
+
+
+```{r Load data, cache=TRUE, message=FALSE}
+load("./Data/DEG.RData")
+```
+
+
+
+```{r EDA, message = FALSE, fig.height=9, fig.width=12}
+library(DESeq2)
+#check count distrubution for each group
+sapply(split(colSums(counts(dds))/1e6, samples$Localization), summary)
+
+boxplot(assay(rld), las=2, col=c("blue","brown")[as.numeric(as.factor(samples$Localization))], names=samples$Biosample.term.name, main = "Regularized Log of sample counts")
+legend(x = 80, y =120, legend = c("Cytosol","Nucleus"), fill = c("blue","brown"))
+
+plotMA(res05, main="MA plot: nuclear/cytoplasmic")
+
+plotPCA(rld, intgroup=c( "Biosample.term.name"), ntop = nrow(res05))
+
+plotPCA(rld, intgroup=c( "Platform"), ntop = nrow(res05))
+plotPCA(rld, intgroup=c( "Lib_method"), ntop = nrow(res05))
+
+plotPCA(rld, intgroup=c( "Localization"), ntop = nrow(res05))
+
+```
+
+No direct batch effects are observable and judging from the final PCA plot it appears the majority of variation (PC1) is due to Nuclear/Cytosolic fractionation.
+
+Now we will cluster the samples to look for sample level outliers.
+
+
+```{r sample Clustering, cache = TRUE, message=FALSE,fig.height=9, fig.width=12}
+library("RColorBrewer")
+library("pheatmap")
+sampleDists <- dist(t(assay(rld)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(samples$Biosample.term.name, rld$Localization, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(355)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+# It appears there may be a sample outlier, "H1-ESC - nucleus" has a very high distance to any other sample and does not cluster by cell type like all other H1-ESC samples. Let's see which sample that is
+
+rownames(sampleDistMatrix) <- 1:nrow(samples)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(355)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+```
+
+ Sample 16 (H1-ESC - Nuclear) appears an outlier based on sample clustering as well as in the count boxplot above. If you examine the 16th boxplot you will see an enormous amount of very high values unlike other samples. In addition, it is isolated in the very top left of the PCA plots.
+ 
+Therefore we will remove it
+
+```{r DEG2, cache = TRUE,  message = FALSE}
+library(tximport)
+library(DESeq2)
+library(readr)
+
+samples = samples[-16, ]
+txi.salmon =tximport(files[-16], type="salmon", tx2gene = tx2gene, reader = read_tsv)
+
+
+dds = DESeqDataSetFromTximport(txi.salmon, samples, design = ~ Biosample.term.name + Lib_method + Platform + Localization)
+dds_DE =DESeq(dds)
+
+##contrast takes 3 args: name of variable, factor level of numerator and factor level of denominator 
+res05 =results(dds_DE, alpha = 0.05, contrast = c("Localization","nucleus","cytosol"))
+rm(txdb,k)
+
+rld <- rlog(dds, blind=FALSE)
+
+save.image("./Data/DEG2.RData")
+```
+
+
+```{r Post_filter, message =FALSE, cache = TRUE}
+library(Biostrings)
+library(stringr)
+library(biomaRt)
+library("RColorBrewer")
+library("pheatmap")
+
+load(file="./Data/DEG2.RData")
+
+plotPCA(rld, intgroup=c( "Biosample.term.name"), ntop = nrow(res05))
+
+sampleDists <- dist(t(assay(rld)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(samples$Biosample.term.name, rld$Localization, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(355)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+
+res05= res05[!is.na(res05$padj), ] 
+
+         
+mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map = getBM(mart = mart, attributes = c("ensembl_gene_id", "percentage_gene_gc_content","gene_biotype","start_position","end_position","chromosome_name", "external_gene_name","transcript_length", "transcript_count"),
+            filters = "ensembl_gene_id", values=rownames(res05))
+
+sig_match = match(rownames(res05),  map$ensembl_gene_id)
+res05$gene_name = map$external_gene_name[sig_match]
+res05$biotype = map$gene_biotype[sig_match]
+res05$GC = map$percentage_gene_gc_content[sig_match]
+res05$transcript_length = map$transcript_length[sig_match]
+res05$transcript_count = map$transcript_count[sig_match]
+lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense RNA", "lincRNA","ncrna host","processed_transcript", "sense_intronic" , "sense_overlapping")
+
+lnc_test=c()
+for (biotype in res05$biotype) {
+    lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
+}
+res05$lncRNA = lnc_test
+res05 = res05[res05$lncRNA==TRUE, ]
+
+seq = getSequence(id = rownames(res05), type="ensembl_gene_id", seqType = "cdna", mart = mart)
+seq$RNA=""
+for ( i in 1:nrow(seq)){
+    seq$RNA[i] = as.character(RNAString(reverseComplement(DNAString(seq$cdna[i]))))
+}
+seq = seq[match(rownames(res05), seq$ensembl_gene_id), ]
+df = cbind(res05, seq) 
+df = df[ ,colnames(df) != "cdna"]
+
+for ( i in 1:nrow(df)){
+    write(paste0(">", rownames(df)[i], "\n", str_sub(df$RNA[i], start = 1, end = 32000), "\n"), append = TRUE, "./Data/Trans.fa", sep="")
+}
+
+# Construct K-mer count matrix for k=1 to k =6 ----------------------------
+kmer_mat = matrix( ncol = 4^6 + 4^5 + 4^4 + 4^3 + 4^2 + 4^1, nrow = nrow(df), data =0)
+
+for (i in 1:nrow(df)){
+    s =RNAString(df$RNA[i])
+    kmers = oligonucleotideFrequency(s, 6)
+    kmer_mat[i,1:4096 ] = as.vector(kmers)
+    
+    kmers = oligonucleotideFrequency(s, 5)
+    kmer_mat[i,4097:(4096 + 4^5) ] = as.vector(kmers)
+    
+    kmers = oligonucleotideFrequency(s, 4)
+    kmer_mat[i,5121:(5120 + 4^4) ] = as.vector(kmers)
+    
+    kmers = oligonucleotideFrequency(s, 3)
+    kmer_mat[i,5377:(5376 + 4^3) ] = as.vector(kmers)
+    
+    kmers = oligonucleotideFrequency(s, 2)
+    kmer_mat[i,5441:(5440 + 4^2) ] = as.vector(kmers)
+    
+    kmers = oligonucleotideFrequency(s, 1)
+    kmer_mat[i,5457:(5456 + 4^1) ] = as.vector(kmers)
+}
+colnames(kmer_mat) = c(names(oligonucleotideFrequency(s, 6)), names(oligonucleotideFrequency(s, 5)), names(oligonucleotideFrequency(s, 4)), names(oligonucleotideFrequency(s, 3)), names(oligonucleotideFrequency(s, 2)), names(oligonucleotideFrequency(s, 1)) )
+
+
+df = cbind(df, as.data.frame(kmer_mat))
+df = df[ , colnames(df) != "lncRNA" & colnames(df) != "ensembl_gene_id" ]
+
+df = df[!is.na(df$log2FoldChange), ]
+
+write.csv( df , "./Data/DE_lncRNAs_kmertable.csv", row.names = TRUE)
+```
+
+
+

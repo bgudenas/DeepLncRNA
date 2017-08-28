@@ -1,0 +1,82 @@
+f---
+title: "Differential_transcrip_expr"
+author: "Brian Gudenas"
+date: "August 18, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "C:/Users/Brian/Documents/Localization")
+```
+
+
+```{r DL_Libraries, eval=FALSE}
+source("https://bioconductor.org/biocLite.R")
+biocLite("rhdf5")
+devtools::install_github("pachterlab/sleuth")
+```
+
+```{r Libraries}
+library(readr)
+library(stringr)
+```
+
+
+```{r Metadata, cache = TRUE}
+## load Metadata and convert Salmon output for use in Sleuth using wasabi::prepare_fish_for_sleuth
+samples = read_tsv("./Data/Meta/metadata.tsv")
+colnames(samples) = make.names(colnames(samples))
+Pair = read.table("./Data/Meta/Pair_map.txt", sep="\t", header = TRUE)
+
+samples = samples[!is.na(match(samples$File.accession, Pair$Pair1)), ]
+
+samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" | samples$Biosample.subcellular.fraction.term.name == "cytosol", ]
+
+files = file.path(getwd(), "Data/Results", samples$File.accession)
+
+
+```
+
+```{r Sleuth, cache = TRUE}
+library(dplyr)
+library(sleuth)
+
+samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
+samples$Lib_method = paste0(samples$Library.made.from, samples$Library.depleted.in)
+s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
+
+s2c = dplyr::mutate(s2c, path = files)
+
+#s2c = filter(s2c ,  !grepl("low", samples$Audit.WARNING) )
+
+RNA = dplyr::filter(s2c, Lib == "RNArRNA")
+polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNArRNA")
+nopolyA = dplyr::filter(s2c, Lib == "RNArRNA, polyadenylated mRNA")
+
+
+so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE)
+so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
+so_nopolyA = sleuth_prep(nopolyA, extra_bootstrap_summary = TRUE)
+save.image("./Data/DTE.RData")
+
+```
+
+```{r DTE, cache = TRUE}
+library(ggplot2)
+
+plot_pca(so_nopolyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Minus Poly A")
+plot_pca(so_RNA, color_by = "cell", text_labels = TRUE) +ggtitle("Total RNA")
+plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
+```
+Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. Upon inspection these samples contain audit warnings for "low read depth" so we will remove them.
+`r dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")`
+
+```{r, New_polyA, cache=TRUE}
+polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
+so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
+plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
+
+```
+
