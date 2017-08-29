@@ -1,13 +1,15 @@
-f---
+---
 title: "Differential_transcrip_expr"
 author: "Brian Gudenas"
 date: "August 18, 2017"
 output: html_document
+fig_width: 8
+fig_height: 6
 ---
 
 ```{r setup, include=FALSE}
 library(knitr)
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache.lazy = FALSE, warning = FALSE)
 opts_knit$set(root.dir = "C:/Users/Brian/Documents/Localization")
 ```
 
@@ -21,10 +23,13 @@ devtools::install_github("pachterlab/sleuth")
 ```{r Libraries}
 library(readr)
 library(stringr)
+library(sleuth)
+library(dplyr)
+library(ggplot2)
 ```
 
 
-```{r Metadata, cache = TRUE}
+```{r Metadata}
 ## load Metadata and convert Salmon output for use in Sleuth using wasabi::prepare_fish_for_sleuth
 samples = read_tsv("./Data/Meta/metadata.tsv")
 colnames(samples) = make.names(colnames(samples))
@@ -40,8 +45,6 @@ files = file.path(getwd(), "Data/Results", samples$File.accession)
 ```
 
 ```{r Sleuth, cache = TRUE}
-library(dplyr)
-library(sleuth)
 
 samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
 samples$Lib_method = paste0(samples$Library.made.from, samples$Library.depleted.in)
@@ -63,20 +66,74 @@ save.image("./Data/DTE.RData")
 
 ```
 
-```{r DTE, cache = TRUE}
-library(ggplot2)
-
+```{r DTE}
 plot_pca(so_nopolyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Minus Poly A")
 plot_pca(so_RNA, color_by = "cell", text_labels = TRUE) +ggtitle("Total RNA")
 plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
 ```
-Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. Upon inspection these samples contain audit warnings for "low read depth" so we will remove them.
-`r dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")`
+
+
+```{r}
+dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")
+```
+
+Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. 
+Upon inspection these samples contain audit warnings for "low read depth" so we will remove them 
 
 ```{r, New_polyA, cache=TRUE}
 polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
 so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
-plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
+plot_pca(so_polyA, color_by = "cell") +ggtitle("Poly A")
+save.image("./Data/DTE.RData")
 
 ```
 
+Now we will perform differential expression analysis for each RNA-seq dataset. Multiple testing adjustments are already performed within each DE test therefore we will only adjust the overall FDR-threshold since 3 tests  are being performed. Therefore we selected the FDR threshold of 0.01 (0.01 < (0.05/3) )
+
+```{r Model_nopolyA, cache =TRUE}
+
+so_nopolyA <- sleuth_fit(so_nopolyA, ~cell + condition, 'full')
+so_nopolyA <- sleuth_fit(so_nopolyA, ~cell, 'reduced')
+so_nopolyA <- sleuth_lrt(so_nopolyA, 'reduced', 'full')
+so_nopolyA = sleuth_wt(so_nopolyA, "conditionnucleus")
+wt_results = sleuth_results(so_nopolyA, 'conditionnucleus')
+lrt_results = sleuth_results(so_nopolyA, "reduced:full", "lrt")
+res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+out_name = paste0("./Data/tables/DTE_nopolyA","_","condition_nucleus", ".tsv")
+res = res[!is.na(res$qval), ]
+write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+```{r Model_RNA, cache =TRUE}
+
+so_RNA <- sleuth_fit(so_RNA, ~cell + condition, 'full')
+so_RNA <- sleuth_fit(so_RNA, ~cell, 'reduced')
+so_RNA <- sleuth_lrt(so_RNA, 'reduced', 'full')
+so_RNA = sleuth_wt(so_RNA, "conditionnucleus")
+wt_results = sleuth_results(so_RNA, 'conditionnucleus')
+lrt_results = sleuth_results(so_RNA, "reduced:full", "lrt")
+res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+out_name = paste0("./Data/tables/DTE_RNA","_","condition_nucleus", ".tsv")
+res = res[!is.na(res$qval), ]
+write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+```{r Model_polyA, cache =TRUE}
+# add in platform covariate since polyA samples were run on genome analyzer or hiseq
+so_polyA <- sleuth_fit(so_polyA, ~cell + platform + condition, 'full')
+so_polyA <- sleuth_fit(so_polyA, ~cell + platform, 'reduced')
+so_polyA <- sleuth_lrt(so_polyA, 'reduced', 'full')
+so_polyA = sleuth_wt(so_polyA, "conditionnucleus")
+wt_results = sleuth_results(so_polyA, 'conditionnucleus')
+lrt_results = sleuth_results(so_polyA, "reduced:full", "lrt")
+res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+out_name = paste0("./Data/tables/DTE_polyA","_","condition_nucleus", ".tsv")
+res = res[!is.na(res$qval), ]
+write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
