@@ -276,6 +276,8 @@ Kmer_add = function(df, k){
   return(df)
 }
 
+Unsupervised = Kmer_add(map, k = 6)
+saveRDS(Unsupervised, "./Data/Unsupervised_df.rds")
 ```
 
 
