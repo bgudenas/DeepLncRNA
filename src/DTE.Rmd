@@ -72,25 +72,30 @@ plot_pca(so_RNA, color_by = "cell", text_labels = TRUE) +ggtitle("Total RNA")
 plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
 ```
 
+Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. 
+Upon inspection these samples contain audit warnings for "low read depth" so we will remove them 
 
 ```{r}
 dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")
 ```
 
-Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. 
-Upon inspection these samples contain audit warnings for "low read depth" so we will remove them 
 
 ```{r, New_polyA, cache=TRUE}
 polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
 so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
-plot_pca(so_polyA, color_by = "cell") +ggtitle("Poly A")
+plot_pca(so_polyA, color_by = "cell", text_labels = TRUE) +ggtitle("Poly A")
+
+nRNA = nrow(RNA)
+npolyA = nrow(polyA)
+nnopolyA = nrow(nopolyA)
+
 save.image("./Data/DTE.RData")
 
 ```
 
 Now we will perform differential expression analysis for each RNA-seq dataset. Multiple testing adjustments are already performed within each DE test therefore we will only adjust the overall FDR-threshold since 3 tests  are being performed. Therefore we selected the FDR threshold of 0.01 (0.01 < (0.05/3) )
 
-```{r Model_nopolyA, cache =TRUE}
+```{r Model_nopolyA}
 
 so_nopolyA <- sleuth_fit(so_nopolyA, ~cell + condition, 'full')
 so_nopolyA <- sleuth_fit(so_nopolyA, ~cell, 'reduced')
@@ -102,11 +107,12 @@ res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")],
 res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
 out_name = paste0("./Data/tables/DTE_nopolyA","_","condition_nucleus", ".tsv")
 res = res[!is.na(res$qval), ]
+res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
-```{r Model_RNA, cache =TRUE}
+```{r Model_RNA}
 
 so_RNA <- sleuth_fit(so_RNA, ~cell + condition, 'full')
 so_RNA <- sleuth_fit(so_RNA, ~cell, 'reduced')
@@ -118,11 +124,12 @@ res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")],
 res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
 out_name = paste0("./Data/tables/DTE_RNA","_","condition_nucleus", ".tsv")
 res = res[!is.na(res$qval), ]
+res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
-```{r Model_polyA, cache =TRUE}
+```{r Model_polyA}
 # add in platform covariate since polyA samples were run on genome analyzer or hiseq
 so_polyA <- sleuth_fit(so_polyA, ~cell + platform + condition, 'full')
 so_polyA <- sleuth_fit(so_polyA, ~cell + platform, 'reduced')
@@ -134,6 +141,110 @@ res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")],
 res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
 out_name = paste0("./Data/tables/DTE_polyA","_","condition_nucleus", ".tsv")
 res = res[!is.na(res$qval), ]
+res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
+
+```{r Merge_results, eval = FALSE}
+  polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") %>% 
+          filter(qval < 0.01)
+  nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") %>% 
+          filter(qval < 0.01)
+  RNA = read_tsv("./Data/tables/DTE_RNA_condition_nucleus.tsv") %>% 
+          filter(qval < 0.01)
+  
+  df = as.data.frame(rbind(cbind(polyA$target_id, polyA$b, "polyA"),
+            cbind(nopolyA$target_id, nopolyA$b, "nopolyA"),
+            cbind(RNA$target_id, RNA$b, "RNA")))
+  colnames(df) = c("target_id","b","type")
+  df$b = as.numeric(as.character(df$b))
+  
+  nTotal =  94 # total number of samples
+  #  set weights for each dataset to integrate the log fold-change estimates from the 3 DE tests
+  df$wt = npolyA
+  df$wt[df$type == "nopolyA"] = nnopolyA
+  df$wt[df$type == "RNA"] = nRNA
+  df$target_id = as.character(df$target_id)
+  
+  
+  joined_df = matrix(nrow=length(unique(df$target_id)), ncol = 1)
+  rownames(joined_df) = unique(df$target_id)
+  colnames(joined_df) = "b"
+  for (i in rownames(joined_df)) {
+    trans = df[df$target_id == i, ]
+    wt_sum = sum(trans$b *trans$wt)/sum(trans$wt)
+    joined_df[ rownames(joined_df) == i, 1] = wt_sum
+  }
+  
+joined_df = as.data.frame(joined_df)
+```
+
+```{r, LncRNA_test, eval = FALSE}
+mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","gene_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
+            filters = "ensembl_transcript_id", values=rownames(joined_df))
+
+
+lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
+
+lnc_test=c()
+for (biotype in map$gene_biotype) {
+    lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
+}
+mat = match(rownames(joined_df), map$ensembl_transcript_id)
+
+
+joined_df$lncRNA = lnc_test[mat]
+joined_df$gene_biotype = map$gene_biotype[mat]
+joined_df$transcript_length = map$transcript_length[mat]
+joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
+
+
+lncRNAs = joined_df[joined_df$lncRNA == TRUE, ]
+lncRNAs = lncRNAs[!is.na(lncRNAs$b), ]
+
+seq = getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+lncRNAs$cdna = seq$cdna[match(rownames(lncRNAs), seq$ensembl_transcript_id)]
+lncRNAs = lncRNAs[, -2]
+
+saveRDS(lncRNAs, "./Data/DE_lncRNAs.rds")
+```
+
+```{r, genome_lncRNAs, cache = TRUE}
+library(seqinr)
+library(stringr)
+library(biomaRt)
+
+ncRNA = read.fasta("./Data/Homo_sapiens.GRCh38.ncrna.fa")
+Annot = getAnnot.list(ncRNA)
+
+out =c()
+
+for (i in Annot){
+  ID = strsplit(i[1][[1]], split = "\\.")[[1]][1]
+  ID = str_sub(ID, 2, nchar(ID))
+  biotype = strsplit(i[1][[1]], split = "transcript_biotype:")[[1]][2]
+  biotype = strsplit(biotype, "gene_symbol:")[[1]][1]
+  biotype = str_trim(biotype)
+  
+  lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
+  
+  if (biotype %in% lncRNA_filter){
+    out =c(out, ID)
+  }
+}
+
+mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","gene_biotype","transcript_length","percentage_gene_gc_content", "transcript_count"),
+            filters = "ensembl_transcript_id", values = out)
+
+seq = getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+
+map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
+saveRDS(map, "./Data/genomic_lncRNAs.rds")
+
+```
+
+
+
