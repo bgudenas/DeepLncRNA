@@ -247,27 +247,30 @@ saveRDS(map, "./Data/genomic_lncRNAs.rds")
 ```
 
 ```{r Kmer_add}
+# this function takes a df of transcripts (containing a "cdna" column of the sequence) and integer of K for which it calculates
+# k-mer frequency features from 4:K and appends these columns to df
 
 Kmer_add = function(df, k){
   #df must contain "cdna" column
   #k is largest int of 
-  kmer_mat = matrix( ncol = sum(4^seq(1, k)) , nrow = nrow(df), data =0)
+  kmer_mat = matrix( ncol = sum(4^seq(4, k)) , nrow = nrow(df), data =0)
   
   for (i in 1:nrow(df)){
     seq =DNAString(df$cdna[i])
+    len = df$transcript_length[i]
     index = 0
-    for (j in 1:k) {
+    for (j in 4:k) {
     kmers = oligonucleotideFrequency(seq, j)
     ind2 = index
     if (j == 1){ ind2 = 0}
     
-    kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)
+    kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)/len
     index = index + (4^j)
     }
   }
   
   nams =c()
-  for (i in 1:k){
+  for (i in 4:k){
     nams =c(nams, names(oligonucleotideFrequency(seq, i)) )
   
   }
@@ -276,9 +279,61 @@ Kmer_add = function(df, k){
   return(df)
 }
 
-Unsupervised = Kmer_add(map, k = 6)
+# Create function which filters K-mers using t.test between Nuclear and Cytosolic transcripts
+Kmer_filt = function(df){
+  library(broom)  
+  
+  test_vals =c()
+  Nuclear = df$b > 1
+  Cyto = df$b < 0
+  
+  for ( i in 6:ncol(df)) {
+    vals = tidy(t.test(df[Nuclear, i], df[Cyto, i] ) )
+    test_vals = c(test_vals, vals$p.value )
+  }
+  names(test_vals) = colnames(df[6:ncol(df)])
+    
+  
+  test_vals = p.adjust(test_vals, method = "fdr")
+  filt = which(test_vals < 0.01)
+  
+  filt = c(1:5, filt+5)
+  
+  return(filt)
+  
+}
+
+
+Supervised = Kmer_add(lncRNAs, k = 7)
+filt = Kmer_filt(Supervised)
+Supervised = Supervised[ , filt]
+
+genome = genome[is.na(match(genome$ensembl_transcript_id, rownames(lncRNAs)) ),  ]
+Unsupervised = Kmer_add(genome, k = 7)
+Unsupervised = Unsupervised[ , filt]
 saveRDS(Unsupervised, "./Data/Unsupervised_df.rds")
 ```
+
+```{r}
+Supervised = Supervised[ , -5]
+Supervised$gene_biotype = as.factor(Supervised$gene_biotype)
+
+inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised))
+train = Supervised[inTrain, ]
+test = Supervised[-inTrain, ]
+
+library(randomForest)
+rf = randomForest(data = train,
+                  b ~ .,
+                  ntree = 1000)
+
+
+test_vals = predict(rf, test)
+cor.test(test_vals, test$b)
+sqrt(mean((test_vals - test$b)^2))
+
+```
+
 
 
 
