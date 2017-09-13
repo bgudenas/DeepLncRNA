@@ -59,9 +59,9 @@ polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNArRNA")
 nopolyA = dplyr::filter(s2c, Lib == "RNArRNA, polyadenylated mRNA")
 
 
-so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE)
-so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
-so_nopolyA = sleuth_prep(nopolyA, extra_bootstrap_summary = TRUE)
+so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
+so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
+so_nopolyA = sleuth_prep(nopolyA, extra_bootstrap_summary = TRUE , transformation_function = function(x) log2(x + 0.5))
 save.image("./Data/DTE.RData")
 
 ```
@@ -82,7 +82,7 @@ dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")
 
 ```{r, New_polyA, cache=TRUE}
 polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
-so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE)
+so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE,  transformation_function = function(x) log2(x + 0.5))
 plot_pca(so_polyA, color_by = "cell", text_labels = TRUE) +ggtitle("Poly A")
 
 nRNA = nrow(RNA)
@@ -146,7 +146,7 @@ write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
-```{r Merge_results, eval = FALSE}
+```{r Merge_results}
   polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") %>% 
           filter(qval < 0.01)
   nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") %>% 
@@ -182,7 +182,7 @@ joined_df = as.data.frame(joined_df)
 
 ```{r, LncRNA_test, eval = FALSE}
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","gene_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
             filters = "ensembl_transcript_id", values=rownames(joined_df))
 
 
@@ -219,7 +219,10 @@ library(biomaRt)
 ncRNA = read.fasta("./Data/Homo_sapiens.GRCh38.ncrna.fa")
 Annot = getAnnot.list(ncRNA)
 
-out =c()
+  lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
+
+lnc_test=c()
+bios =c()
 
 for (i in Annot){
   ID = strsplit(i[1][[1]], split = "\\.")[[1]][1]
@@ -228,38 +231,39 @@ for (i in Annot){
   biotype = strsplit(biotype, "gene_symbol:")[[1]][1]
   biotype = str_trim(biotype)
   
-  lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
-  
-  if (biotype %in% lncRNA_filter){
-    out =c(out, ID)
-  }
+  if ( sum(grepl(biotype, lncRNA_filter)) > 0 ){ lnc_test =c(lnc_test, ID) 
+                                            bios =c(bios, biotype)}
 }
 
+
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","gene_biotype","transcript_length","percentage_gene_gc_content", "transcript_count"),
-            filters = "ensembl_transcript_id", values = out)
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_length","percentage_gene_gc_content", "transcript_count"), filters = "ensembl_transcript_id", values = lnc_test)
+names(bios) = lnc_test
+map$transcript_biotype = bios[match(map$ensembl_transcript_id, names(bios))]
 
 seq = getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 
 map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
+rownames(map) = map$ensembl_transcript_id
+map = map[ ,-1]
 saveRDS(map, "./Data/genomic_lncRNAs.rds")
 
 ```
 
-```{r Kmer_add}
+```{r Kmer_add, eval = FALSE}
 # this function takes a df of transcripts (containing a "cdna" column of the sequence) and integer of K for which it calculates
-# k-mer frequency features from 4:K and appends these columns to df
+# k-mer frequency features from 2:K and appends these columns to df
 
 Kmer_add = function(df, k){
   #df must contain "cdna" column
   #k is largest int of 
-  kmer_mat = matrix( ncol = sum(4^seq(4, k)) , nrow = nrow(df), data =0)
+  kmer_mat = matrix( ncol = sum(4^seq(2, k)) , nrow = nrow(df), data =0)
   
   for (i in 1:nrow(df)){
     seq =DNAString(df$cdna[i])
     len = df$transcript_length[i]
     index = 0
-    for (j in 4:k) {
+    for (j in 2:k) {
     kmers = oligonucleotideFrequency(seq, j)
     ind2 = index
     if (j == 1){ ind2 = 0}
@@ -270,7 +274,7 @@ Kmer_add = function(df, k){
   }
   
   nams =c()
-  for (i in 4:k){
+  for (i in 2:k){
     nams =c(nams, names(oligonucleotideFrequency(seq, i)) )
   
   }
@@ -307,26 +311,81 @@ Kmer_filt = function(df){
 Supervised = Kmer_add(lncRNAs, k = 7)
 filt = Kmer_filt(Supervised)
 Supervised = Supervised[ , filt]
+saveRDS(Supervised, "./Data/Supervised_df.rds")
 
-genome = genome[is.na(match(genome$ensembl_transcript_id, rownames(lncRNAs)) ),  ]
+genome = genome[genome$transcript_length >= 200, ]
 Unsupervised = Kmer_add(genome, k = 7)
 Unsupervised = Unsupervised[ , filt]
 saveRDS(Unsupervised, "./Data/Unsupervised_df.rds")
 ```
 
-```{r}
-Supervised = Supervised[ , -5]
-Supervised$gene_biotype = as.factor(Supervised$gene_biotype)
+```{r, RNA_motifs, eval = FALSE}
 
-inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised))
+RNABP_Motif_add = function(df){
+  
+motifs_dir = file.path("./Data/motifs/Homo_sapiens_2017_09_07_CISBP/pwms_all_motifs")
+mot_num = length(list.files(motifs_dir))
+
+mat_mot = matrix(nrow = nrow(df), ncol = mot_num , data = 0)
+
+for (i in 1:mot_num){
+    fils = list.files(motifs_dir)[i]
+    mot = try(read.table(paste0(motifs_dir, "/", fils), sep = "\t", row.names = 1, header = TRUE ), silent = FALSE)
+    if (class(mot) != "try-error"){
+        mot = t(mot)
+# rownames(mot)
+# [1] "A" "C" "G" "U"
+## Motifs are in units of RNA so we must complement to DNA (A -> T, C -> G, G -> C, U -> A)
+        rownames(mot) = c("T","G","C", "A")
+        mot = mot[order(rownames(mot)), ]
+        
+    
+        for (j in 1:nrow(df)){
+        seq = df$cdna[j]
+        counts = countPWM(mot, seq, min.score = "80%") + countPWM(mot, reverse(seq), min.score = "80%")
+        counts = counts/df$transcript_length[j]
+        
+        mat_mot[j,i] = counts
+        }
+    }    
+}
+
+df = cbind(df, mat_mot)
+return(df)
+}
+Supervised = RNABP_Motif_add(Supervised)
+saveRDS(Supervised, "./Data/Supervised_train.rds")
+
+Unsupervised = RNABP_Motif_add(Unsupervised)
+saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
+```
+
+
+```{r, eval = FALSE}
+
+set.seed(54321)
+# Supervised$Localized = "Nuclear"
+# Supervised$Localized[Supervised$b < -1] = "Cytosolic"
+# Supervised = Supervised[!(Supervised$b > -1 & Supervised$b < 1), ]
+Supervised = Supervised[ , -c(5 )]
+Supervised$b = round(Supervised$b, 2)
+
+Supervised$gene_biotype = as.factor(Supervised$gene_biotype)
+Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ]
+Supervised$gene_biotype = droplevels(Supervised$gene_biotype)
+# Supervised$Localized = as.factor(Supervised$Localized)
+
+inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised), )
 train = Supervised[inTrain, ]
 test = Supervised[-inTrain, ]
 
 library(randomForest)
+
 rf = randomForest(data = train,
                   b ~ .,
-                  ntree = 1000)
+                  ntree = 2000)
 
+pred = predic
 
 test_vals = predict(rf, test)
 cor.test(test_vals, test$b)
