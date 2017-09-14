@@ -262,6 +262,7 @@ saveRDS(map, "./Data/genomic_lncRNAs.rds")
 # k-mer frequency features from 2:K and appends these columns to df
 
 Kmer_add = function(df, k){
+  library(Biostrings)
   #df must contain "cdna" column
   #k is largest int of 
   kmer_mat = matrix( ncol = sum(4^seq(2, k)) , nrow = nrow(df), data =0)
@@ -295,18 +296,18 @@ Kmer_filt = function(df){
   library(broom)  
   
   test_vals =c()
-  Nuclear = df$b > 1
-  Cyto = df$b < 0
+
   
   for ( i in 6:ncol(df)) {
-    vals = tidy(t.test(df[Nuclear, i], df[Cyto, i] ) )
-    test_vals = c(test_vals, vals$p.value )
+    vals = tidy(cor.test(df[ , i], df$b, method = "spearman"))$p.value
+    # vals = cor(df[ , i], df$b, method = "spearman")
+    test_vals = c(test_vals, vals )
   }
   names(test_vals) = colnames(df[6:ncol(df)])
     
+  test_vals = p.adjust(test_vals, "fdr")
   
-  test_vals = p.adjust(test_vals, method = "fdr")
-  filt = which(test_vals < 0.01)
+  filt = which(test_vals < 0.05)
   
   filt = c(1:5, filt+5)
   
