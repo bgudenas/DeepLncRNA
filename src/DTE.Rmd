@@ -39,7 +39,7 @@ samples = samples[!is.na(match(samples$File.accession, Pair$Pair1)), ]
 
 samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" | samples$Biosample.subcellular.fraction.term.name == "cytosol", ]
 
-files = file.path(getwd(), "Data/Results", samples$File.accession)
+files = file.path(getwd(), "/Data/Results", samples$File.accession)
 
 
 ```
@@ -67,9 +67,14 @@ save.image("./Data/DTE.RData")
 ```
 
 ```{r DTE}
-plot_pca(so_nopolyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Minus Poly A")
-plot_pca(so_RNA, color_by = "cell", text_labels = TRUE) +ggtitle("Total RNA")
-plot_pca(so_polyA, color_by = "cell",  text_labels = TRUE) +ggtitle("Poly A")
+lds = plot_pc_variance(so_nopolyA)
+plot_pca(so_nopolyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Minus Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+
+lds = plot_pc_variance(so_RNA)
+plot_pca(so_RNA, color_by = "condition", text_labels = TRUE) +ggtitle("PCA - Total RNA") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+
+lds = plot_pc_variance(so_polyA)
+plot_pca(so_polyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
 ```
 
 Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. 
@@ -83,7 +88,9 @@ dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")
 ```{r, New_polyA, cache=TRUE}
 polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
 so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE,  transformation_function = function(x) log2(x + 0.5))
-plot_pca(so_polyA, color_by = "cell", text_labels = TRUE) +ggtitle("Poly A")
+
+lds = plot_pc_variance(so_polyA)
+plot_pca(so_polyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
 
 nRNA = nrow(RNA)
 npolyA = nrow(polyA)
@@ -189,14 +196,14 @@ map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biot
 lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
 
 lnc_test=c()
-for (biotype in map$gene_biotype) {
+for (biotype in map$transcript_biotype) {
     lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
 }
 mat = match(rownames(joined_df), map$ensembl_transcript_id)
 
 
 joined_df$lncRNA = lnc_test[mat]
-joined_df$gene_biotype = map$gene_biotype[mat]
+joined_df$transcript_biotype = map$transcript_biotype[mat]
 joined_df$transcript_length = map$transcript_length[mat]
 joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
 
@@ -204,7 +211,7 @@ joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
 lncRNAs = joined_df[joined_df$lncRNA == TRUE, ]
 lncRNAs = lncRNAs[!is.na(lncRNAs$b), ]
 
-seq = getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+seq = biomaRt::getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 lncRNAs$cdna = seq$cdna[match(rownames(lncRNAs), seq$ensembl_transcript_id)]
 lncRNAs = lncRNAs[, -2]
 
@@ -241,7 +248,7 @@ map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_leng
 names(bios) = lnc_test
 map$transcript_biotype = bios[match(map$ensembl_transcript_id, names(bios))]
 
-seq = getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 
 map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
 rownames(map) = map$ensembl_transcript_id
@@ -308,7 +315,7 @@ Kmer_filt = function(df){
 }
 
 
-Supervised = Kmer_add(lncRNAs, k = 7)
+Supervised = Kmer_add(lncRNAs, k = 8)
 filt = Kmer_filt(Supervised)
 Supervised = Supervised[ , filt]
 saveRDS(Supervised, "./Data/Supervised_df.rds")
