@@ -261,6 +261,11 @@ saveRDS(map, "./Data/genomic_lncRNAs.rds")
 # this function takes a df of transcripts (containing a "cdna" column of the sequence) and integer of K for which it calculates
 # k-mer frequency features from 2:K and appends these columns to df
 
+lncRNAs = readRDS("./DE_lncRNAs.rds")
+inTrain = sample(1:nrow(lncRNAs), .7*nrow(lncRNAs))
+
+genome = readRDS("./genomic_lncRNAs.rds")
+
 Kmer_add = function(df, k){
   library(Biostrings)
   #df must contain "cdna" column
@@ -274,8 +279,6 @@ Kmer_add = function(df, k){
     for (j in 2:k) {
     kmers = oligonucleotideFrequency(seq, j)
     ind2 = index
-    if (j == 1){ ind2 = 0}
-    
     kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)/len
     index = index + (4^j)
     }
@@ -307,7 +310,7 @@ Kmer_filt = function(df){
     
   test_vals = p.adjust(test_vals, "fdr")
   
-  filt = which(test_vals < 0.05)
+  filt = which(test_vals < 0.01)
   
   filt = c(1:5, filt+5)
   
@@ -317,14 +320,14 @@ Kmer_filt = function(df){
 
 
 Supervised = Kmer_add(lncRNAs, k = 8)
-filt = Kmer_filt(Supervised)
+filt = Kmer_filt(Supervised[inTrain, ])
 Supervised = Supervised[ , filt]
-saveRDS(Supervised, "./Data/Supervised_df.rds")
+saveRDS(Supervised, "./Supervised_kmer.rds")
 
 genome = genome[genome$transcript_length >= 200, ]
-Unsupervised = Kmer_add(genome, k = 7)
+Unsupervised = Kmer_add(genome, k = 8)
 Unsupervised = Unsupervised[ , filt]
-saveRDS(Unsupervised, "./Data/Unsupervised_df.rds")
+saveRDS(Unsupervised, "./Unsupervised_kmer.rds")
 ```
 
 ```{r, RNA_motifs, eval = FALSE}
