@@ -260,11 +260,11 @@ saveRDS(map, "./Data/genomic_lncRNAs.rds")
 ```{r Kmer_add, eval = FALSE}
 # this function takes a df of transcripts (containing a "cdna" column of the sequence) and integer of K for which it calculates
 # k-mer frequency features from 2:K and appends these columns to df
-
-lncRNAs = readRDS("./DE_lncRNAs.rds")
+set.seed(54321)
+lncRNAs = readRDS("./Data/DE_lncRNAs.rds")
 inTrain = sample(1:nrow(lncRNAs), .7*nrow(lncRNAs))
 
-genome = readRDS("./genomic_lncRNAs.rds")
+genome = readRDS("./Data/genomic_lncRNAs.rds")
 
 Kmer_add = function(df, k){
   library(Biostrings)
@@ -293,9 +293,10 @@ Kmer_add = function(df, k){
   df = cbind(df, kmer_mat)
   return(df)
 }
+############################################
 
-# Create function which filters K-mers using t.test between Nuclear and Cytosolic transcripts
-Kmer_filt = function(df){
+Kmer_filt = function(df, topN){
+#takes df with cols[6:ncol(df)] as kmer-counts and ranks kmers based on p-value from Spearman Correlation with L2FC selecting 1:topN of kmers
   library(broom)  
   
   test_vals =c()
@@ -309,8 +310,11 @@ Kmer_filt = function(df){
   names(test_vals) = colnames(df[6:ncol(df)])
     
   test_vals = p.adjust(test_vals, "fdr")
+  test_vals = sort(test_vals)
   
-  filt = which(test_vals < 0.01)
+  kmer_mat = match(names(test_vals), colnames(df[ ,6:ncol(df)]) )
+  
+  filt = kmer_mat[1:topN]
   
   filt = c(1:5, filt+5)
   
@@ -320,14 +324,14 @@ Kmer_filt = function(df){
 
 
 Supervised = Kmer_add(lncRNAs, k = 8)
-filt = Kmer_filt(Supervised[inTrain, ])
+filt = Kmer_filt(Supervised[inTrain, ], 500)
 Supervised = Supervised[ , filt]
-saveRDS(Supervised, "./Supervised_kmer.rds")
+saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
 genome = genome[genome$transcript_length >= 200, ]
 Unsupervised = Kmer_add(genome, k = 8)
 Unsupervised = Unsupervised[ , filt]
-saveRDS(Unsupervised, "./Unsupervised_kmer.rds")
+saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
 ```
 
 ```{r, RNA_motifs, eval = FALSE}
