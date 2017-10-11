@@ -51,8 +51,13 @@ samples$Lib_method = paste0(samples$Library.made.from, samples$Library.depleted.
 s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
 
 s2c = dplyr::mutate(s2c, path = files)
+so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5))
+lds = plot_pc_variance(so)
+plot_pca(so, color_by = "Lib",  text_labels = TRUE) +ggtitle("Total") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+```
 
-#s2c = filter(s2c ,  !grepl("low", samples$Audit.WARNING) )
+There appears to be large amount of variance in the Minus Poly A samples while samples from both other Lib types cluster very tightly. Therefore we will perform DTE within each lib type seperately.
+```{r split, cache = TRUE }
 
 RNA = dplyr::filter(s2c, Lib == "RNArRNA")
 polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNArRNA")
@@ -324,7 +329,7 @@ Kmer_filt = function(df, topN){
 
 
 Supervised = Kmer_add(lncRNAs, k = 8)
-filt = Kmer_filt(Supervised[inTrain, ], 500)
+filt = Kmer_filt(Supervised[inTrain, ], 5000)
 Supervised = Supervised[ , filt]
 saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
@@ -337,6 +342,7 @@ saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
 ```{r, RNA_motifs, eval = FALSE}
 
 RNABP_Motif_add = function(df){
+  library(Biostrings)
   
 motifs_dir = file.path("./Data/motifs/Homo_sapiens_2017_09_07_CISBP/pwms_all_motifs")
 mot_num = length(list.files(motifs_dir))
@@ -345,6 +351,7 @@ mat_mot = matrix(nrow = nrow(df), ncol = mot_num , data = 0)
 
 for (i in 1:mot_num){
     fils = list.files(motifs_dir)[i]
+    #some motif files from CISBP are completely empty and will throw an error so i added a try-catch here
     mot = try(read.table(paste0(motifs_dir, "/", fils), sep = "\t", row.names = 1, header = TRUE ), silent = FALSE)
     if (class(mot) != "try-error"){
         mot = t(mot)
@@ -354,7 +361,6 @@ for (i in 1:mot_num){
         rownames(mot) = c("T","G","C", "A")
         mot = mot[order(rownames(mot)), ]
         
-    
         for (j in 1:nrow(df)){
         seq = df$cdna[j]
         counts = countPWM(mot, seq, min.score = "80%") + countPWM(mot, reverse(seq), min.score = "80%")
@@ -369,36 +375,48 @@ df = cbind(df, mat_mot)
 return(df)
 }
 Supervised = RNABP_Motif_add(Supervised)
+drop_cols = which(colSums(Supervised[ ,6:ncol(Supervised)]) == 0)
+Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
+
 saveRDS(Supervised, "./Data/Supervised_train.rds")
 
 Unsupervised = RNABP_Motif_add(Unsupervised)
+Unsupervised = Unsupervised[ ,- match(names(drop_cols), colnames(Unsupervised))]
 saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
+
 ```
 
 
 ```{r, eval = FALSE}
 
 set.seed(54321)
-# Supervised$Localized = "Nuclear"
-# Supervised$Localized[Supervised$b < -1] = "Cytosolic"
-# Supervised = Supervised[!(Supervised$b > -1 & Supervised$b < 1), ]
+
 Supervised = Supervised[ , -c(5 )]
 Supervised$b = round(Supervised$b, 2)
 
-Supervised$gene_biotype = as.factor(Supervised$gene_biotype)
-Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ]
-Supervised$gene_biotype = droplevels(Supervised$gene_biotype)
+Supervised$transcript_biotype = as.factor(Supervised$transcript_biotype)
+#Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ]
+#Supervised$gene_biotype = droplevels(Supervised$gene_biotype)
 # Supervised$Localized = as.factor(Supervised$Localized)
 
 inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised), )
 train = Supervised[inTrain, ]
 test = Supervised[-inTrain, ]
 
+library(caret)
 library(randomForest)
 
-rf = randomForest(data = train,
-                  b ~ .,
-                  ntree = 2000)
+
+rf = randomForest(x = train[ , -1],
+           y = train$b,
+           #trControl = control,
+           #tuneGrid = tunegrid,
+           mtry = 2100,
+           ntree = 3001)
+print(rf)
+plot(rf)
+save.image("./Data/Raw_RF.RData")
+saveRDS(rf, "./Data/Raw_RF.RData")
 
 pred = predic
 
