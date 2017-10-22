@@ -159,18 +159,19 @@ write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 ```
 
 ```{r Merge_results}
-  polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") %>% 
-          filter(qval < 0.01)
-  nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") %>% 
-          filter(qval < 0.01)
-  RNA = read_tsv("./Data/tables/DTE_RNA_condition_nucleus.tsv") %>% 
-          filter(qval < 0.01)
+  polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") 
+      
+  nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") 
+     
+  RNA = read_tsv("./Data/tables/DTE_RNA_condition_nucleus.tsv") 
+         
   
   df = as.data.frame(rbind(cbind(polyA$target_id, polyA$b, "polyA"),
             cbind(nopolyA$target_id, nopolyA$b, "nopolyA"),
             cbind(RNA$target_id, RNA$b, "RNA")))
   colnames(df) = c("target_id","b","type")
   df$b = as.numeric(as.character(df$b))
+  df$b = round(df$b, 3)
   
   nTotal =  94 # total number of samples
   #  set weights for each dataset to integrate the log fold-change estimates from the 3 DE tests
@@ -185,7 +186,7 @@ write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
   colnames(joined_df) = "b"
   for (i in rownames(joined_df)) {
     trans = df[df$target_id == i, ]
-    wt_sum = sum(trans$b *trans$wt)/sum(trans$wt)
+    wt_sum = sum(trans$b * trans$wt)/sum(trans$wt)
     joined_df[ rownames(joined_df) == i, 1] = wt_sum
   }
   
@@ -212,9 +213,18 @@ joined_df$transcript_biotype = map$transcript_biotype[mat]
 joined_df$transcript_length = map$transcript_length[mat]
 joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
 
-
+joined_df = joined_df[!is.na(joined_df$lncRNA), ]
+pc = joined_df[joined_df$transcript_biotype == "protein_coding", ]
 lncRNAs = joined_df[joined_df$lncRNA == TRUE, ]
-lncRNAs = lncRNAs[!is.na(lncRNAs$b), ]
+
+lnc_norm = density(lncRNAs$b)
+pc_norm = density(pc$b)
+
+plot(lnc_norm , lwd =3, col ="red" , xlab = expression("Log"[2]* " Fold Change"), main = "Nuclear/Cytosolic transcripts" )
+lines(pc_norm, lwd = 3, col = "blue")
+legend( "topleft", legend = c("LncRNA","Protein-coding"), col =c("red","blue"), lty =1, lwd =2,  bty ="n", cex = 1.2)
+
+wilcox.test(pc$b, lncRNAs$b)
 
 seq = biomaRt::getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 lncRNAs$cdna = seq$cdna[match(rownames(lncRNAs), seq$ensembl_transcript_id)]
@@ -266,8 +276,10 @@ saveRDS(map, "./Data/genomic_lncRNAs.rds")
 # this function takes a df of transcripts (containing a "cdna" column of the sequence) and integer of K for which it calculates
 # k-mer frequency features from 2:K and appends these columns to df
 set.seed(54321)
+
 lncRNAs = readRDS("./Data/DE_lncRNAs.rds")
-inTrain = sample(1:nrow(lncRNAs), .7*nrow(lncRNAs))
+lncRNAs = lncRNAs[lncRNAs$transcript_length >= 200, ]
+inTrain = sample(1:nrow(lncRNAs), .7*nrow(lncRNAs) )
 
 genome = readRDS("./Data/genomic_lncRNAs.rds")
 
@@ -302,29 +314,29 @@ Kmer_add = function(df, k){
 
 Kmer_filt = function(df, topN){
 #takes df with cols[6:ncol(df)] as kmer-counts and ranks kmers based on p-value from Spearman Correlation with L2FC selecting 1:topN of kmers
-  library(broom)  
-  
+  library(broom)
+
   test_vals =c()
 
-  
+
   for ( i in 6:ncol(df)) {
-    vals = tidy(cor.test(df[ , i], df$b, method = "spearman"))$p.value
+    vals = cor(df[ , i], df$b, method = "spearman")
     # vals = cor(df[ , i], df$b, method = "spearman")
-    test_vals = c(test_vals, vals )
+    test_vals = c(test_vals, abs(vals ))
   }
   names(test_vals) = colnames(df[6:ncol(df)])
-    
-  test_vals = p.adjust(test_vals, "fdr")
-  test_vals = sort(test_vals)
-  
+
+  #test_vals = p.adjust(test_vals, "fdr")
+  test_vals = sort(test_vals, decreasing = TRUE)
+
   kmer_mat = match(names(test_vals), colnames(df[ ,6:ncol(df)]) )
-  
+
   filt = kmer_mat[1:topN]
-  
+
   filt = c(1:5, filt+5)
-  
+
   return(filt)
-  
+
 }
 
 
@@ -334,7 +346,7 @@ Supervised = Supervised[ , filt]
 saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
 genome = genome[genome$transcript_length >= 200, ]
-Unsupervised = Kmer_add(genome, k = 8)
+Unsupervised = Kmer_add(genome, k = 7)
 Unsupervised = Unsupervised[ , filt]
 saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
 ```
@@ -360,13 +372,14 @@ for (i in 1:mot_num){
 ## Motifs are in units of RNA so we must complement to DNA (A -> T, C -> G, G -> C, U -> A)
         rownames(mot) = c("T","G","C", "A")
         mot = mot[order(rownames(mot)), ]
+        #print(ncol(mot))
         
         for (j in 1:nrow(df)){
+        len = df$transcript_length[j]
         seq = df$cdna[j]
         counts = countPWM(mot, seq, min.score = "80%") + countPWM(mot, reverse(seq), min.score = "80%")
-        counts = counts/df$transcript_length[j]
         
-        mat_mot[j,i] = counts
+        mat_mot[j,i] = counts/len
         }
     }    
 }
@@ -403,7 +416,7 @@ inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised), )
 train = Supervised[inTrain, ]
 test = Supervised[-inTrain, ]
 
-library(caret)
+#library(caret)
 library(randomForest)
 
 
@@ -411,12 +424,21 @@ rf = randomForest(x = train[ , -1],
            y = train$b,
            #trControl = control,
            #tuneGrid = tunegrid,
-           mtry = 2100,
-           ntree = 3001)
+           ntree = 501)
 print(rf)
 plot(rf)
-save.image("./Data/Raw_RF.RData")
-saveRDS(rf, "./Data/Raw_RF.RData")
+#save.image("./Data/Raw_RF.RData")
+saveRDS(rf, "./Data/Raw_RF.rds")
+
+Loc =rep("Nuclear", nrow(train) )
+Loc[train$b < 0] = "Cytosol"
+Loc = as.factor(Loc)
+
+rf2 = randomForest(x= train[ ,-1], 
+                   y = Loc,
+                   ntree = 501)
+
+
 
 pred = predic
 
