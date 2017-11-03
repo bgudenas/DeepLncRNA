@@ -217,14 +217,24 @@ joined_df = joined_df[!is.na(joined_df$lncRNA), ]
 pc = joined_df[joined_df$transcript_biotype == "protein_coding", ]
 lncRNAs = joined_df[joined_df$lncRNA == TRUE, ]
 
-lnc_norm = density(lncRNAs$b)
-pc_norm = density(pc$b)
+pdf("./Figures/LncRNA_PC_density.pdf")
+ggplot(data= lncRNAs) +
+  geom_density(data = pc, aes(x = b), col = "blue", lwd = 1.5) + 
+  geom_density(aes(x = b), col = "red", lwd = 2) +
+  theme_bw() + 
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=16,face="bold")) +
+  ylab("Density") +
+  xlim(c(-7,7)) +
+  xlab(expression("Log"[2]* " Fold Change") ) +
+  guides()
+  ggl
 
-plot(lnc_norm , lwd =3, col ="red" , xlab = expression("Log"[2]* " Fold Change"), main = "Nuclear/Cytosolic transcripts" )
-lines(pc_norm, lwd = 3, col = "blue")
-legend( "topleft", legend = c("LncRNA","Protein-coding"), col =c("red","blue"), lty =1, lwd =2,  bty ="n", cex = 1.2)
 
-wilcox.test(pc$b, lncRNAs$b)
+## Check number of nuclear and cytosolic lncRNAs
+library(gridExtra)
+lncnum = data.frame("LncRNAs" = nrow(lncRNAs), Nuclear = sum(lncRNAs$b > 3), Cytosol = sum(lncRNAs$b < -1), row.names = NULL)
+grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
+dev.off()
 
 seq = biomaRt::getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 lncRNAs$cdna = seq$cdna[match(rownames(lncRNAs), seq$ensembl_transcript_id)]
@@ -291,12 +301,12 @@ Kmer_add = function(df, k){
   
   for (i in 1:nrow(df)){
     seq =DNAString(df$cdna[i])
-    len = df$transcript_length[i]
+   # len = df$transcript_length[i]
     index = 0
     for (j in 2:k) {
     kmers = oligonucleotideFrequency(seq, j)
     ind2 = index
-    kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)/len
+    kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)
     index = index + (4^j)
     }
   }
@@ -340,14 +350,17 @@ Kmer_filt = function(df, topN){
 }
 
 
-Supervised = Kmer_add(lncRNAs, k = 8)
-filt = Kmer_filt(Supervised[inTrain, ], 5000)
-Supervised = Supervised[ , filt]
+Supervised = Kmer_add(lncRNAs, k = 5)
+#filt = Kmer_filt(Supervised[inTrain, ], 5000)
+#Supervised = Supervised[ , filt]
+
+#Supervised[ ,6:ncol(Supervised)] = Supervised[ ,6:ncol(Supervised)]/Supervised$transcript_length
 saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
 genome = genome[genome$transcript_length >= 200, ]
-Unsupervised = Kmer_add(genome, k = 7)
-Unsupervised = Unsupervised[ , filt]
+Unsupervised = Kmer_add(genome, k = 5)
+#Unsupervised = Unsupervised[ , filt]
+#Unsupervised[ ,6:ncol(Unsupervised)] = Unsupervised[ ,6:ncol(Unsupervised)]/Unsupervised$transcript_length
 saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
 ```
 
@@ -375,11 +388,10 @@ for (i in 1:mot_num){
         #print(ncol(mot))
         
         for (j in 1:nrow(df)){
-        len = df$transcript_length[j]
+        #len = df$transcript_length[j]
         seq = df$cdna[j]
-        counts = countPWM(mot, seq, min.score = "80%") + countPWM(mot, reverse(seq), min.score = "80%")
-        
-        mat_mot[j,i] = counts/len
+        counts = countPWM(mot, seq, min.score = "60%") 
+        mat_mot[j,i] = counts
         }
     }    
 }
@@ -405,14 +417,14 @@ saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
 set.seed(54321)
 
 Supervised = Supervised[ , -c(5 )]
-Supervised$b = round(Supervised$b, 2)
+#Supervised$b = round(Supervised$b, 2)
 
 Supervised$transcript_biotype = as.factor(Supervised$transcript_biotype)
 #Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ]
 #Supervised$gene_biotype = droplevels(Supervised$gene_biotype)
 # Supervised$Localized = as.factor(Supervised$Localized)
 
-inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised), )
+inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised) )
 train = Supervised[inTrain, ]
 test = Supervised[-inTrain, ]
 
