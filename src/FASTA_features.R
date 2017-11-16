@@ -90,4 +90,4 @@ dfMotifs = RNABP_Motif_add(dfKmer)
 
 library(h2o)
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
-  
+ # TODO: add AE feature extraction and warnings
