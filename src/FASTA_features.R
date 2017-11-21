@@ -89,5 +89,7 @@ RNABP_Motif_add = function(df){
 dfMotifs = RNABP_Motif_add(dfKmer)
 
 library(h2o)
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "3G")
  # TODO: add AE feature extraction and warnings
+DNN = h2o.loadModel("./Data/DNN")
+
