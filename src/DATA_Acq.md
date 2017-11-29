@@ -14,28 +14,29 @@ Data from ENCODE matrix portal is obtained  by using filters:
 3. PolyA mRNA-seq
 4. polyA depleted RNA-seq
 5. fastq
+###Copy link address from the download button and curl it below
 
 Code
 ======================================
     #setup dirs
     mkdir ENCODE
-    cd ENCODE
-    mkdir src
-    mkdir Data
-    mkdir Data/Raw Data/Meta
-    cd Data/Meta
+    mkdir ENCODE/Raw ENCODE/Meta
+    mkdir Raw Meta
+    cd ENCODE/Meta
 
-	## following link was created on 7/30/17 as described above
-    curl https://www.encodeproject.org/batch_download/type%3DExperiment%26assay_title%3Dtotal%2BRNA-seq%26assay_title%3DpolyA%2BmRNA%2BRNA-seq%26assay_title%3DpolyA%2Bdepleted%2BRNA-seq%26files.file_type%3Dfastq%26replicates.library.biosample.donor.organism.scientific_name%3DHomo%2Bsapiens > RAW_Links.txt
+    ## following download link was created on 11/27/17 as described above
+    curl https://www.encodeproject.org/batch_download/type%3DExperiment%26replicates.library.biosample.donor.organism.scientific_name%3DHomo%2Bsapiens%26assay_title%3Dtotal%2BRNA-seq%26assay_title%3DpolyA%2Bdepleted%2BRNA-seq%26assay_title%3DpolyA%2BmRNA%2BRNA-seq%26files.file_type%3Dfastq > RAW_Links.txt
+
     head -n 1 RAW_Links.txt ##metadata link in first row
 	# may need to paste metadata link in browser if curl doesnt work
     curl https://www.encodeproject.org/metadata/type=Experiment&replicates.library.biosample.donor.organism.scientific_name=Homo+sapiens&assay_title=total+RNA-seq&files.file_type=fastq/metadata.tsv > metadata.tsv
+    ## Check total cell fractions
     cut -f 14 metadata.tsv  | sort | uniq
-	##select all samples that are subcellular fractions
+    ##select all samples that are subcellular fractions
     awk 'BEGIN {FS="\t"} ($14 != "")' metadata.tsv  | cut -f 42 > Subcell_DL_urls
     ## Download all data
 	cd ../Raw
-    xargs -n 1 curl -O -L < ../Subcell_DL_urls
+    xargs -n 1 curl -O -L < ../Meta/Subcell_DL_urls
 
     ## Create file for paired-end samples mappings contains pair1 pair2 and pair1_number
     awk 'BEGIN {FS="\t"} ($14 != "")' metadata.tsv  | cut -f 1,36 > Pair_map.txt
