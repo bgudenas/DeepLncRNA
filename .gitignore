@@ -2,6 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
-./Data
-./Figures
-./src/DTE_cache
+/Data/
+/Figures
+/src/DTE_cache
+/Manuscript
