@@ -258,6 +258,8 @@ seq = biomaRt::getSequence(id = rownames(DElncRNAs), type="ensembl_transcript_id
 DElncRNAs$cdna = seq$cdna[match(rownames(DElncRNAs), seq$ensembl_transcript_id)]
 #lncRNAs = lncRNAs[, -2]
 
+DElncRNAs$transcript_length = as.numeric(lapply(DElncRNAs$cdna, nchar))
+DElncRNAs = DElncRNAs[DElncRNAs$transcript_length >= 200, ]
 saveRDS(DElncRNAs, "./Data/DE_lncRNAs.rds")
 
 seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
@@ -301,6 +303,8 @@ map = map[ ,-1]
 seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 lncRNAs$cdna = seq$cdna[match(lncRNAs$transcript_id, seq$ensembl_transcript_id)]
 lncRNAs = dplyr::select(lncRNAs, transcript_id, transcript_type, cdna)
+lncRNAs$transcript_length = as.numeric(lapply(lncRNAs$cdna, nchar))
+lncRNAs = lncRNAs[lncRNAs$transcript_length >= 200, ]
 saveRDS(lncRNAs, "./Data/genomic_lncRNAs.rds")
 
 ```
@@ -310,9 +314,7 @@ saveRDS(lncRNAs, "./Data/genomic_lncRNAs.rds")
 # k-mer frequency features from 2:K and appends these columns to df
 set.seed(54321)
 
-lncRNAs = readRDS("./Data/DE_lncRNAs.rds")
-lncRNAs = lncRNAs[lncRNAs$transcript_length >= 200, ]
-inTrain = sample(1:nrow(lncRNAs), .7*nrow(lncRNAs) )
+DElncRNAs = readRDS("./Data/DE_lncRNAs.rds")
 
 genome = readRDS("./Data/genomic_lncRNAs.rds")
 
@@ -373,14 +375,13 @@ Kmer_filt = function(df, topN){
 }
 
 
-Supervised = Kmer_add(lncRNAs, k = 5)
+Supervised = Kmer_add(DElncRNAs, k = 5)
 #filt = Kmer_filt(Supervised[inTrain, ], 5000)
 #Supervised = Supervised[ , filt]
 
 #Supervised[ ,6:ncol(Supervised)] = Supervised[ ,6:ncol(Supervised)]/Supervised$transcript_length
 saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
-genome = genome[genome$transcript_length >= 200, ]
 Unsupervised = Kmer_add(genome, k = 5)
 #Unsupervised = Unsupervised[ , filt]
 #Unsupervised[ ,6:ncol(Unsupervised)] = Unsupervised[ ,6:ncol(Unsupervised)]/Unsupervised$transcript_length
@@ -423,7 +424,8 @@ df = cbind(df, mat_mot)
 return(df)
 }
 Supervised = RNABP_Motif_add(Supervised)
-drop_cols = which(colSums(Supervised[ ,6:ncol(Supervised)]) == 0)
+#colnames to drop
+drop_cols = which(colSums(Supervised[ ,5:ncol(Supervised)]) == 0)
 Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
 
 saveRDS(Supervised, "./Data/Supervised_train.rds")
