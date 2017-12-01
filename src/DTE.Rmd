@@ -101,7 +101,11 @@ nRNA = nrow(RNA)
 npolyA = nrow(polyA)
 nnopolyA = nrow(nopolyA)
 
+
 save.image("./Data/DTE.RData")
+
+samples = dplyr::filter(samples, File.accession != "ENCFF901DUO" & File.accession != "ENCFF792JEE")
+write.csv(samples, "../Data/Meta/Sample_data.csv")
 
 ```
 
@@ -194,28 +198,44 @@ joined_df = as.data.frame(joined_df)
 ```
 
 ```{r, LncRNA_test, eval = FALSE}
+library(seqinr)
+library(stringr)
+library(biomaRt)
+library(rtracklayer)
+
+download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.long_noncoding_RNAs.gtf.gz", destfile = "./Data/Annotation/gencodev27lncRNAs.gtf.gz")
+R.utils::gunzip("./Data/Annotation/gencodev27lncRNAs.gtf.gz")
+
+lncRNAs = rtracklayer::readGFF("../Data/Annotation/gencodev27lncRNAs.gtf", version = 2L)
+lncRNAs = dplyr::filter(lncRNAs, type == "transcript")
+# remove trailing decimal
+lncRNAs$transcript_id = lapply(strsplit(lncRNAs$transcript_id, "\\."), "[[", 1)
+
+lnc_match = match(rownames(joined_df), lncRNAs$transcript_id)
+joined_df$transcript_biotype = lncRNAs$transcript_type[lnc_match]
+
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
-            filters = "ensembl_transcript_id", values=rownames(joined_df))
-
-
-lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
-
-lnc_test=c()
-for (biotype in map$transcript_biotype) {
-    lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
-}
-mat = match(rownames(joined_df), map$ensembl_transcript_id)
-
-
-joined_df$lncRNA = lnc_test[mat]
-joined_df$transcript_biotype = map$transcript_biotype[mat]
-joined_df$transcript_length = map$transcript_length[mat]
-joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
+# map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
+#             filters = "ensembl_transcript_id", values=rownames(joined_df))
+# 
+# 
+# lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
+# 
+# lnc_test=c()
+# for (biotype in map$transcript_biotype) {
+#     lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
+# }
+# mat = match(rownames(joined_df), map$ensembl_transcript_id)
+# 
+# 
+# joined_df$lncRNA = lnc_test[mat]
+# joined_df$transcript_biotype = map$transcript_biotype[mat]
+# joined_df$transcript_length = map$transcript_length[mat]
+# joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
 
 joined_df = joined_df[!is.na(joined_df$lncRNA), ]
 pc = joined_df[joined_df$transcript_biotype == "protein_coding", ]
-lncRNAs = joined_df[joined_df$lncRNA == TRUE, ]
+DElncRNAs = joined_df[!is.na(joined_df$transcript_biotype), ]
 
 pdf("./Figures/LncRNA_PC_density.pdf")
 ggplot(data= lncRNAs) +
@@ -225,9 +245,7 @@ ggplot(data= lncRNAs) +
   theme(axis.text=element_text(size=14), axis.title=element_text(size=16,face="bold")) +
   ylab("Density") +
   xlim(c(-7,7)) +
-  xlab(expression("Log"[2]* " Fold Change") ) +
-  guides()
-  ggl
+  xlab(expression("Log"[2]* " Fold Change") )
 
 
 ## Check number of nuclear and cytosolic lncRNAs
@@ -236,11 +254,13 @@ lncnum = data.frame("LncRNAs" = nrow(lncRNAs), Nuclear = sum(lncRNAs$b > 3), Cyt
 grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
 dev.off()
 
-seq = biomaRt::getSequence(id = rownames(lncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
-lncRNAs$cdna = seq$cdna[match(rownames(lncRNAs), seq$ensembl_transcript_id)]
-lncRNAs = lncRNAs[, -2]
+seq = biomaRt::getSequence(id = rownames(DElncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+DElncRNAs$cdna = seq$cdna[match(rownames(DElncRNAs), seq$ensembl_transcript_id)]
+#lncRNAs = lncRNAs[, -2]
 
-saveRDS(lncRNAs, "./Data/DE_lncRNAs.rds")
+saveRDS(DElncRNAs, "./Data/DE_lncRNAs.rds")
+
+seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 ```
 
 ```{r, genome_lncRNAs, cache = TRUE}
@@ -278,7 +298,10 @@ seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcr
 map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
 rownames(map) = map$ensembl_transcript_id
 map = map[ ,-1]
-saveRDS(map, "./Data/genomic_lncRNAs.rds")
+seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+lncRNAs$cdna = seq$cdna[match(lncRNAs$transcript_id, seq$ensembl_transcript_id)]
+lncRNAs = dplyr::select(lncRNAs, transcript_id, transcript_type, cdna)
+saveRDS(lncRNAs, "./Data/genomic_lncRNAs.rds")
 
 ```
 
