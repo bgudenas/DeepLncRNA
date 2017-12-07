@@ -2,7 +2,9 @@
 title: "Differential_transcrip_expr"
 author: "Brian Gudenas"
 date: "August 18, 2017"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 fig_width: 8
 fig_height: 6
 ---
@@ -105,7 +107,7 @@ nnopolyA = nrow(nopolyA)
 save.image("./Data/DTE.RData")
 
 samples = dplyr::filter(samples, File.accession != "ENCFF901DUO" & File.accession != "ENCFF792JEE")
-write.csv(samples, "../Data/Meta/Sample_data.csv")
+write.csv(samples, "./Data/Meta/Sample_data.csv")
 
 ```
 
@@ -160,6 +162,7 @@ res = res[!is.na(res$qval), ]
 res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
+save.image("./Data/Sleuth_results.RData")
 ```
 
 ```{r Merge_results}
@@ -428,10 +431,34 @@ Supervised = RNABP_Motif_add(Supervised)
 drop_cols = which(colSums(Supervised[ ,5:ncol(Supervised)]) == 0)
 Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
 
+Supervised = Supervised[, -c(2,3)]
+Super$transcript_length = as.numeric(Super$transcript_length)
 saveRDS(Supervised, "./Data/Supervised_train.rds")
+set.seed(54321)
+inTrain = sample(1:nrow(Supervised), size = 0.6*nrow(Supervised))
+Train = Supervised[inTrain, ]
+Valid = Supervised[-inTrain, ]
+Test = Valid[1 : (nrow(Valid)*0.5), ]
+Valid = Valid[((nrow(Valid)*0.5)+1) : nrow(Valid), ]
+
+#verify splits equal whole == TRUE
+(nrow(Train) + nrow(Valid) + nrow(Test)) == nrow(Supervised)
+#Check splits dont contain duplicates == FALSE
+table(duplicated(c(rownames(Train), rownames(Valid), rownames(Test))))
+
+# Save dataframes
+saveRDS(Train, "./Data/Training_set.rds")
+saveRDS(Valid, "./Data/Validation_set.rds")
+saveRDS(Test, "./Data/Test_set.rds")
+
 
 Unsupervised = RNABP_Motif_add(Unsupervised)
 Unsupervised = Unsupervised[ ,- match(names(drop_cols), colnames(Unsupervised))]
+
+Unsupervised = Unsupervised[ , -c(2,3)]
+## remove any instances in the testing or validation set from the unsupervised
+drop_vals = c(rownames(Valid, Test))
+Unsupervised = Unsupervised[is.na(match(Unsupervised$transcript_id, drop_vals)), ]
 saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
 
 ```
