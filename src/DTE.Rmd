@@ -3,6 +3,7 @@ title: "Differential_transcrip_expr"
 author: "Brian Gudenas"
 date: "August 18, 2017"
 output:
+  word_document: default
   pdf_document: default
   html_document: default
 fig_width: 8
@@ -12,7 +13,7 @@ fig_height: 6
 ```{r setup, include=FALSE}
 library(knitr)
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache.lazy = FALSE, warning = FALSE)
-opts_knit$set(root.dir = "C:/Users/Brian/Documents/Localization")
+opts_knit$set(root.dir = "..")
 ```
 
 
@@ -32,7 +33,7 @@ library(ggplot2)
 
 
 ```{r Metadata}
-## load Metadata and convert Salmon output for use in Sleuth using wasabi::prepare_fish_for_sleuth
+## load Sample Metadata 
 samples = read_tsv("./Data/Meta/metadata.tsv")
 colnames(samples) = make.names(colnames(samples))
 Pair = read.table("./Data/Meta/Pair_map.txt", sep="\t", header = TRUE)
@@ -43,15 +44,14 @@ samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" 
 
 files = file.path(getwd(), "/Data/Results", samples$File.accession)
 
+samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
+samples$Lib_method = paste0(samples$Library.made.from,"_", samples$Library.depleted.in)
+s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
 
 ```
 
-```{r Sleuth, cache = TRUE}
-
-samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
-samples$Lib_method = paste0(samples$Library.made.from, samples$Library.depleted.in)
-s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
-
+PCA of all samples
+```{r Total_PCA, cache = TRUE}
 s2c = dplyr::mutate(s2c, path = files)
 so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5))
 lds = plot_pc_variance(so)
@@ -61,9 +61,9 @@ plot_pca(so, color_by = "Lib",  text_labels = TRUE) +ggtitle("Total") + theme(te
 There appears to be large amount of variance in the Minus Poly A samples while samples from both other Lib types cluster very tightly. Therefore we will perform DTE within each lib type seperately.
 ```{r split, cache = TRUE }
 
-RNA = dplyr::filter(s2c, Lib == "RNArRNA")
-polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNArRNA")
-nopolyA = dplyr::filter(s2c, Lib == "RNArRNA, polyadenylated mRNA")
+RNA = dplyr::filter(s2c, Lib == "RNA_rRNA")
+polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNA_rRNA")
+nopolyA = dplyr::filter(s2c, Lib == "RNA_rRNA, polyadenylated mRNA")
 
 
 so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
@@ -128,6 +128,8 @@ res = res[!is.na(res$qval), ]
 res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
+rm(lrt_results, wt_results, res)
+
 ```
 
 ```{r Model_RNA}
@@ -162,7 +164,6 @@ res = res[!is.na(res$qval), ]
 res = res[res$qval <= 0.01, ]
 write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
-save.image("./Data/Sleuth_results.RData")
 ```
 
 ```{r Merge_results}
@@ -207,53 +208,40 @@ library(biomaRt)
 library(rtracklayer)
 
 download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.long_noncoding_RNAs.gtf.gz", destfile = "./Data/Annotation/gencodev27lncRNAs.gtf.gz")
-R.utils::gunzip("./Data/Annotation/gencodev27lncRNAs.gtf.gz")
+R.utils::gunzip("./Data/Annotation/gencodev27lncRNAs.gtf.gz", overwrite = TRUE)
 
-lncRNAs = rtracklayer::readGFF("../Data/Annotation/gencodev27lncRNAs.gtf", version = 2L)
+lncRNAs = rtracklayer::readGFF("./Data/Annotation/gencodev27lncRNAs.gtf", version = 2L)
 lncRNAs = dplyr::filter(lncRNAs, type == "transcript")
 # remove trailing decimal
 lncRNAs$transcript_id = lapply(strsplit(lncRNAs$transcript_id, "\\."), "[[", 1)
 
 lnc_match = match(rownames(joined_df), lncRNAs$transcript_id)
 joined_df$transcript_biotype = lncRNAs$transcript_type[lnc_match]
+DElncRNAs = joined_df[!is.na(joined_df$transcript_biotype), ]
+joined_df = joined_df[is.na(joined_df$transcript_biotype), ]
 
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-# map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "transcript_length","percentage_gene_gc_content", "transcript_count"),
-#             filters = "ensembl_transcript_id", values=rownames(joined_df))
-# 
-# 
-# lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
-# 
-# lnc_test=c()
-# for (biotype in map$transcript_biotype) {
-#     lnc_test =c(lnc_test, (sum(grepl(biotype, lncRNA_filter)) > 0 ) )
-# }
-# mat = match(rownames(joined_df), map$ensembl_transcript_id)
-# 
-# 
-# joined_df$lncRNA = lnc_test[mat]
-# joined_df$transcript_biotype = map$transcript_biotype[mat]
-# joined_df$transcript_length = map$transcript_length[mat]
-# joined_df$percentage_gene_gc_content = map$percentage_gene_gc_content[mat]
 
-joined_df = joined_df[!is.na(joined_df$lncRNA), ]
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype"), filters = "ensembl_transcript_id", values=rownames(joined_df))
+joined_df$transcript_biotype = map$transcript_biotype[match( rownames(joined_df), map$ensembl_transcript_id) ]
+
 pc = joined_df[joined_df$transcript_biotype == "protein_coding", ]
-DElncRNAs = joined_df[!is.na(joined_df$transcript_biotype), ]
+
 
 pdf("./Figures/LncRNA_PC_density.pdf")
-ggplot(data= lncRNAs) +
+ggplot(data= DElncRNAs) +
   geom_density(data = pc, aes(x = b), col = "blue", lwd = 1.5) + 
   geom_density(aes(x = b), col = "red", lwd = 2) +
   theme_bw() + 
   theme(axis.text=element_text(size=14), axis.title=element_text(size=16,face="bold")) +
   ylab("Density") +
-  xlim(c(-7,7)) +
+  xlim(c(-6,6)) +
   xlab(expression("Log"[2]* " Fold Change") )
 
 
 ## Check number of nuclear and cytosolic lncRNAs
 library(gridExtra)
-lncnum = data.frame("LncRNAs" = nrow(lncRNAs), Nuclear = sum(lncRNAs$b > 3), Cytosol = sum(lncRNAs$b < -1), row.names = NULL)
+lncnum = data.frame("LncRNAs" = nrow(DElncRNAs), Nuclear = sum(DElncRNAs$b > 3), Cytosol = sum(DElncRNAs$b < -1), row.names = NULL)
 grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
 dev.off()
 
@@ -269,40 +257,40 @@ seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_
 ```
 
 ```{r, genome_lncRNAs, cache = TRUE}
-library(seqinr)
+#library(seqinr)
 library(stringr)
 library(biomaRt)
 
-ncRNA = read.fasta("./Data/Homo_sapiens.GRCh38.ncrna.fa")
-Annot = getAnnot.list(ncRNA)
-
-  lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
-
-lnc_test=c()
-bios =c()
-
-for (i in Annot){
-  ID = strsplit(i[1][[1]], split = "\\.")[[1]][1]
-  ID = str_sub(ID, 2, nchar(ID))
-  biotype = strsplit(i[1][[1]], split = "transcript_biotype:")[[1]][2]
-  biotype = strsplit(biotype, "gene_symbol:")[[1]][1]
-  biotype = str_trim(biotype)
-  
-  if ( sum(grepl(biotype, lncRNA_filter)) > 0 ){ lnc_test =c(lnc_test, ID) 
-                                            bios =c(bios, biotype)}
-}
-
-
-mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_length","percentage_gene_gc_content", "transcript_count"), filters = "ensembl_transcript_id", values = lnc_test)
-names(bios) = lnc_test
-map$transcript_biotype = bios[match(map$ensembl_transcript_id, names(bios))]
-
-seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
-
-map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
-rownames(map) = map$ensembl_transcript_id
-map = map[ ,-1]
+# ncRNA = read.fasta("./Data/Homo_sapiens.GRCh38.ncrna.fa")
+# Annot = getAnnot.list(ncRNA)
+# 
+#   lncRNA_filter = c("3prime_overlapping_ncrna", "antisense","antisense_RNA", "lincRNA","ncrna_host","processed_transcript", "sense_intronic" , "sense_overlapping", "bidirectional_lncRNA", "non_coding", "macro_lncRNA")
+# 
+# lnc_test=c()
+# bios =c()
+# 
+# for (i in Annot){
+#   ID = strsplit(i[1][[1]], split = "\\.")[[1]][1]
+#   ID = str_sub(ID, 2, nchar(ID))
+#   biotype = strsplit(i[1][[1]], split = "transcript_biotype:")[[1]][2]
+#   biotype = strsplit(biotype, "gene_symbol:")[[1]][1]
+#   biotype = str_trim(biotype)
+#   
+#   if ( sum(grepl(biotype, lncRNA_filter)) > 0 ){ lnc_test =c(lnc_test, ID) 
+#                                             bios =c(bios, biotype)}
+# }
+# 
+# 
+# mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_length","percentage_gene_gc_content", "transcript_count"), filters = "ensembl_transcript_id", values = lnc_test)
+# names(bios) = lnc_test
+# map$transcript_biotype = bios[match(map$ensembl_transcript_id, names(bios))]
+# 
+# seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+# 
+# map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
+# rownames(map) = map$ensembl_transcript_id
+# map = map[ ,-1]
 seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 lncRNAs$cdna = seq$cdna[match(lncRNAs$transcript_id, seq$ensembl_transcript_id)]
 lncRNAs = dplyr::select(lncRNAs, transcript_id, transcript_type, cdna)
@@ -310,6 +298,40 @@ lncRNAs$transcript_length = as.numeric(lapply(lncRNAs$cdna, nchar))
 lncRNAs = lncRNAs[lncRNAs$transcript_length >= 200, ]
 saveRDS(lncRNAs, "./Data/genomic_lncRNAs.rds")
 
+```
+
+```{r heatmap}
+RNA_mat = so_RNA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
+RNAdf = tidyr::spread(RNA_mat, key  = sample, tpm)
+
+IDs = unlist(lapply(strsplit(RNAdf$target_id, "\\."), "[[", 1))
+
+defilt = match(IDs, rownames(DElncRNAs))
+
+RNAdf = RNAdf[!is.na(defilt), ]
+
+nopoly_mat = so_nopolyA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
+nopolydf = tidyr::spread(nopoly_mat, key  = sample, tpm) %>% filter(!is.na(defilt))   
+
+poly_mat = so_polyA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
+polydf = tidyr::spread(poly_mat, key  = sample, tpm) %>% filter(!is.na(defilt))   
+
+rm(RNA_mat, nopoly_mat, poly_mat)
+annot = as.data.frame(so_RNA$sample_to_covariates[ ,c(2)])
+rownames(annot) = so_RNA$sample_to_covariates$sample
+pheatmap(RNAdf[ ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE)
+
+annot = as.data.frame(so_nopolyA$sample_to_covariates[ ,c(2,3)])
+rownames(annot) = so_nopolyA$sample_to_covariates$sample
+annot = annot[order(annot$condition, annot$cell), ]
+nopolydf = nopolydf[ , c(1, match( rownames(annot), colnames(nopolydf) ))]
+pheatmap(nopolydf[ ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE, cluster_cols = FALSE)
+
+annot = as.data.frame(so_polyA$sample_to_covariates[ ,c(2,3)])
+rownames(annot) = so_polyA$sample_to_covariates$sample
+annot = annot[order(annot$condition, annot$cell), ]
+polydf = polydf[ , c(1,match( rownames(annot), colnames(polydf) ))]
+pheatmap(polydf[ ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE, cluster_cols = FALSE)
 ```
 
 ```{r Kmer_add, eval = FALSE}
