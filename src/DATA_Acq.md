@@ -79,10 +79,11 @@ Transcript Quantification - Kallisto
     cd Annot
     ## Download reference fasta
     wget ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.transcripts.fa.gz
+
     ## Download ERCC Spike in file from ENCODE
     wget https://www.encodeproject.org/files/ENCFF001RTP/@@download/ENCFF001RTP.fasta.gz
 
-    ### Build Kallisto Index
+    ### Build Kallisto Index on reference transcripts and ERCC spike ins
     kallisto index -i transcripts.idx gencode.v27.transcripts.fa.gz ENCFF001RTP.fasta.gz
 
 
