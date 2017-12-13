@@ -38,20 +38,21 @@ Code
 	cd ../Raw
     xargs -n 1 curl -O -L < ../Meta/Subcell_DL_urls
 
-    ## Create file for paired-end samples mappings contains pair1 pair2 and pair1_number
-    awk 'BEGIN {FS="\t"} ($14 != "")' metadata.tsv  | cut -f 1,36 > Pair_map.txt
+    ## Create file for paired-end samples mappings contains pair1_ID, pair2_ID and read_pair number
+    awk 'BEGIN {FS="\t"} ($14 != "")' metadata.tsv  | cut -f 1,36,35 > Pair_map.txt
     cd ..
 
 Filter to remove duplicates
 ====================================
     R
 
-    #Pair map contains duplicates that need to removed
+    ## Pair_map contains duplicates that need to removed (from a single sample pair 1 and pair 2 files are both rows)
+    ## We also make sure that first file accession is always read1 and second is always read2
     pair = read.table("./Pair_map.txt", header = 1, fill = TRUE, stringsAsFactors = FALSE)
     pairing = pair
     pair = pair[order(pair$accession), ]
 
-    new =vector(mode = "character", length = 24)
+    new =vector(mode = "character")
     for ( i in 1:nrow(pair)) {
         pair = pair[pair$Paired != pair$File[i], ]
         new[i] = pair$File[i]
@@ -69,6 +70,20 @@ FastQC
             do
             fastqc -t 8 Data/$i -o FastQC
     done
+
+Transcript Quantification - Kallisto
+=======================================
+    mkdir Kallisto
+    cd Kallisto
+    mkdir Annot Quant
+    cd Annot
+    ## Download reference fasta
+    wget ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.transcripts.fa.gz
+    ## Download ERCC Spike in file from ENCODE
+    wget https://www.encodeproject.org/files/ENCFF001RTP/@@download/ENCFF001RTP.fasta.gz
+
+    ### Build Kallisto Index
+    kallisto index -i transcripts.idx gencode.v27.transcripts.fa.gz ENCFF001RTP.fasta.gz
 
 
 Transcript Quantification
