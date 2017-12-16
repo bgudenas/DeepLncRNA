@@ -85,21 +85,22 @@ Transcript Quantification - Kallisto
 
     ### Build Kallisto Index on reference transcripts and ERCC spike ins
     kallisto index -i transcripts.idx gencode.v27.transcripts.fa.gz ENCFF001RTP.fasta.gz
+    cd ..
 
 
 Transcript Quantification
 =======================================
-    ## build Salmon transcriptome
-    wget ftp://ftp.ensembl.org/pub/release-88/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz
-    wget ftp://ftp.ensembl.org/pub/release-88/fasta/homo_sapiens/ncrna/Homo_sapiens.GRCh38.ncrna.fa.gz
-    gunzip Homo_sapiens.GRCh38.ncrna.fa.gz 
-    gunzip Homo_sapiens.GRCh38.cdna.all.fa.gz
+    INDEX=./Annot/transcripts.idx
 
-    ## Merge protein-coding and ncRNA into transcriptome file
-    cat Homo_sapiens.GRCh38.cdna.all.fa Homo_sapiens.GRCh38.ncrna.fa > Hg38_Transcriptome.fa
-    
-    salmon -t Hg38_Transcriptome.fa -i Hg38_index
-	
+    while read pair1 pair2;
+        do
+
+        kallisto quant --bias -t 16 --rf-stranded -b 50 -i $INDEX -o ./Quant/${pair1} ../Raw/${pair1}.fastq.gz ../Raw/${pair2}.fastq.gz
+                 
+
+    done <  ../Meta/Pair_map.txt
+
+
 Download RNA motifs from CISBP-RNA and MEME-suite
 ========================================
     wget http://cisbp-rna.ccbr.utoronto.ca/tmp/Homo_sapiens_2017_07_07_1:58_pm.zip
