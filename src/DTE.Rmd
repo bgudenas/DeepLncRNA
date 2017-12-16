@@ -61,6 +61,22 @@ table(s2c$Lib)
 ## Cell types
 table(s2c$cell)
 
+output = read.delim(file = "./Data/Kallisto/Kallisto.o2139569", sep = "\n")
+pairmap = read.delim(file ="./Data/Meta/Pair_map.txt")
+
+alignments = output[grepl("processed", output[,1]), ]
+
+
+pairmap$total_reads = as.numeric(str_trim(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 1)), " reads"), "[[", 1)), "processed"),"[[",2)),",","")))
+pairmap$reads_aligned = as.numeric(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 2)), " reads"), "[[", 1)), ",",""))
+
+pairmap$percent_aligned = pairmap$reads_aligned/pairmap$total_reads*100
+s2c$total_reads = pairmap$total_reads[match(s2c$sample, pairmap$Pair1)]
+s2c$reads_aligned = pairmap$reads_aligned[match(s2c$sample, pairmap$Pair1)]
+
+## total aligned reads
+sum(s2c$reads_aligned)
+
 ```
 
 PCA of all samples
