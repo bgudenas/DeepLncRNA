@@ -50,7 +50,7 @@ samples = samples[!grepl("spikeins", samples$Audit.WARNING), ]
 
 s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
 
-filespath = file.path(getwd(), "/Data/Results", s2c$sample)
+filespath = file.path(getwd(), "/Data/Kallisto/Quant", s2c$sample)
 
 ## Total samples
 nrow(s2c)
@@ -61,6 +61,7 @@ table(s2c$Lib)
 ## Cell types
 table(s2c$cell)
 
+## Kallisto.o* is the standard output from the kallisto quant call for all samples
 output = read.delim(file = "./Data/Kallisto/Kallisto.o2139569", sep = "\n")
 pairmap = read.delim(file ="./Data/Meta/Pair_map.txt")
 
@@ -77,157 +78,225 @@ s2c$reads_aligned = pairmap$reads_aligned[match(s2c$sample, pairmap$Pair1)]
 ## total aligned reads
 sum(s2c$reads_aligned)
 
+rm(alignments, samples, pairmap, Pair, output)
+write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
 ```
 
-PCA of all samples
+EDA of all samples
 ```{r Total_PCA, cache = TRUE}
+## Modify Sleuths basic_filter function to change req of 5 reads in 47% of samples to ==> 5 reads in 4 samples (4/88) to pick up more cell type specific lncRNAs
+loose_filter <- function(row, min_reads = 5, min_prop = 0.04545455) {
+  mean(row >= min_reads) >= min_prop
+}
+
 s2c = dplyr::mutate(s2c, path = filespath)
-so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5))
+so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5),  filter_fun = loose_filter)
 lds = plot_pc_variance(so)
-plot_pca(so, color_by = "Lib",  text_labels = TRUE) +ggtitle("Total") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+
+plot_pca(so, color_by = "condition",  text_labels = TRUE) +ggtitle("Sleuth PCA - condition") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+
+plot_pca(so, color_by = "Lib",  text_labels = TRUE) +ggtitle("Sleuth PCA - Library type") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+
+## Check RLE and PCA  plots after Normalization and filtering
+Expr = so$obs_norm_filt %>%  dplyr::select(target_id, sample, est_counts)
+Emat = tidyr::spread(Expr, key  = sample, est_counts)
+Emat = as.matrix(Emat[,-1])
+
+s2c = s2c[order(s2c$condition), ]
+
+Emat = Emat[ ,match(s2c$sample, colnames(Emat))]
+plotRLE(Emat, col = as.numeric(as.factor(s2c$condition))+2 , xlab = "Samples", ylab = "Relative Log Expression", outline = FALSE, ylim =c(-6,6))
+legend(x = "topright",legend = c("Cytosol","Nuclear"), fill=c("green","blue"))
+
+plotPCA(Emat, cex =2, col = as.numeric(as.factor(s2c$condition)), k=3, pch = as.numeric(as.factor(s2c$Lib)))
+
 ```
 
-There appears to be large amount of variance in the Minus Poly A samples while samples from both other Lib types cluster very tightly. Therefore we will perform DTE within each lib type seperately.
+The samples appear to cluster rather tightly by library type. Even after between sample normalization and filtering there is a large amount of variance in the sample counts and PC1 appears to represent library type rather than condition indicating the need for further normalization by ERCC spikeins. 
+
+
+```{r RUVg}
+# get raw counts
+Expr = so$obs_raw %>%  dplyr::select(target_id, sample, est_counts)
+Emat = tidyr::spread(Expr, key  = sample, est_counts)
+rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
+Emat = as.matrix(Emat[,-1])
+
+s2c = s2c[order(s2c$condition), ]
+
+Emat = Emat[ ,match(s2c$sample, colnames(Emat))]
+
+# Transcripts x Samples
+dim(Emat)
+
+## need to round est_counts to integer for RUVseq
+Emat = round(Emat)
+
+## USE RUVg to normalize samples based on control spikeins
+# Code adapted from RUVSeq vignette
+filter <- apply(Emat, 1, function(x) length(x[x>2])>=2) ##remove non-expressed genes (2 countts in 2 samples)
+filtered <- Emat[filter,]
+trans <- rownames(filtered)[grep("^ENS", rownames(filtered))]
+spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
+
+plotRLE(filtered, outline=FALSE, ylim=c(-6, 6), col=as.numeric(as.factor(s2c$condition))+2)
+plotPCA(filtered, col=as.numeric(as.factor(s2c$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c$Lib)))
+
+x <- as.factor(s2c$condition)
+
+set <- newSeqExpressionSet(as.matrix(filtered),
+                           phenoData = data.frame(x, row.names=colnames(filtered)))
+
+##RUVg
+set1 <- RUVg(set, spikes, k=3)
+wts = pData(set1)[,2:ncol(pData(set1))]
+
+plotRLE(set1, outline=FALSE, ylim=c(-6, 6), col= as.numeric(x)+2)
+
+
+plotPCA(set1, col=as.numeric(as.factor(s2c$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c$Lib)), main="RUVg")
+
+
+```
+After normalization using spikeins, PC1 now represents subcellular fraction instead of library type.
+
 ```{r split, cache = TRUE }
-
-RNA = dplyr::filter(s2c, Lib == "RNA_rRNA")
-polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNA_rRNA")
-nopolyA = dplyr::filter(s2c, Lib == "RNA_rRNA, polyadenylated mRNA")
-
-
-so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
-so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
-so_nopolyA = sleuth_prep(nopolyA, extra_bootstrap_summary = TRUE , transformation_function = function(x) log2(x + 0.5))
-save.image("./Data/DTE.RData")
+# 
+# RNA = dplyr::filter(s2c, Lib == "RNA_rRNA")
+# polyA = dplyr::filter(s2c, Lib == "polyadenylated mRNA_rRNA")
+# nopolyA = dplyr::filter(s2c, Lib == "RNA_rRNA, polyadenylated mRNA")
+# 
+# 
+# so_RNA = sleuth_prep(RNA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
+# so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE, transformation_function = function(x) log2(x + 0.5))
+# so_nopolyA = sleuth_prep(nopolyA, extra_bootstrap_summary = TRUE , transformation_function = function(x) log2(x + 0.5))
+# save.image("./Data/DTE.RData")
 
 ```
 
 ```{r DTE}
-lds = plot_pc_variance(so_nopolyA)
-plot_pca(so_nopolyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Minus Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
-
-lds = plot_pc_variance(so_RNA)
-plot_pca(so_RNA, color_by = "condition", text_labels = TRUE) +ggtitle("PCA - Total RNA") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
-
-lds = plot_pc_variance(so_polyA)
-plot_pca(so_polyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
-```
-
-Appears to be two possible outliers in the Poly A samples (ENCFF901DUO, ENCFF792JEE) driving large variance in PC1. 
-Upon inspection these samples contain audit warnings for "low read depth" so we will remove them 
-
-```{r}
-dplyr::filter(polyA, sample == "ENCFF901DUO" | sample == "ENCFF792JEE")
+# lds = plot_pc_variance(so_nopolyA)
+# plot_pca(so_nopolyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Minus Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+# 
+# lds = plot_pc_variance(so_RNA)
+# plot_pca(so_RNA, color_by = "condition", text_labels = TRUE) +ggtitle("PCA - Total RNA") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+# 
+# lds = plot_pc_variance(so_polyA)
+# plot_pca(so_polyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
 ```
 
 
-```{r, New_polyA, cache=TRUE}
-polyA = dplyr::filter(polyA, sample != "ENCFF901DUO" & sample != "ENCFF792JEE")
-so_polyA = sleuth_prep(polyA, extra_bootstrap_summary = TRUE,  transformation_function = function(x) log2(x + 0.5))
-
-lds = plot_pc_variance(so_polyA)
-plot_pca(so_polyA, color_by = "condition",  text_labels = TRUE) +ggtitle("PCA - Poly A") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
-
-nRNA = nrow(RNA)
-npolyA = nrow(polyA)
-nnopolyA = nrow(nopolyA)
-
-
-save.image("./Data/DTE.RData")
-
-samples = dplyr::filter(samples, File.accession != "ENCFF901DUO" & File.accession != "ENCFF792JEE")
-write.csv(samples, "./Data/Meta/Sample_data.csv")
-
-```
-
-Now we will perform differential expression analysis for each RNA-seq dataset. Multiple testing adjustments are already performed within each DE test therefore we will only adjust the overall FDR-threshold since 3 tests  are being performed. Therefore we selected the FDR threshold of 0.01 (0.01 < (0.05/3) )
+<!-- Now we will perform differential expression analysis for each RNA-seq dataset. Multiple testing adjustments are already performed within each DE test therefore we will only adjust the overall FDR-threshold since 3 tests  are being performed. Therefore we selected the FDR threshold of 0.01 (0.01 < (0.05/3) ) -->
 
 ```{r Model_nopolyA}
-
-so_nopolyA <- sleuth_fit(so_nopolyA, ~cell + condition, 'full')
-so_nopolyA <- sleuth_fit(so_nopolyA, ~cell, 'reduced')
-so_nopolyA <- sleuth_lrt(so_nopolyA, 'reduced', 'full')
-so_nopolyA = sleuth_wt(so_nopolyA, "conditionnucleus")
-wt_results = sleuth_results(so_nopolyA, 'conditionnucleus')
-lrt_results = sleuth_results(so_nopolyA, "reduced:full", "lrt")
-res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
-res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
-out_name = paste0("./Data/tables/DTE_nopolyA","_","condition_nucleus", ".tsv")
-res = res[!is.na(res$qval), ]
-res = res[res$qval <= 0.01, ]
-write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
-
-rm(lrt_results, wt_results, res)
+# 
+# so_nopolyA <- sleuth_fit(so_nopolyA, ~cell + condition, 'full')
+# so_nopolyA <- sleuth_fit(so_nopolyA, ~cell, 'reduced')
+# so_nopolyA <- sleuth_lrt(so_nopolyA, 'reduced', 'full')
+# so_nopolyA = sleuth_wt(so_nopolyA, "conditionnucleus")
+# wt_results = sleuth_results(so_nopolyA, 'conditionnucleus')
+# lrt_results = sleuth_results(so_nopolyA, "reduced:full", "lrt")
+# res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+# res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+# out_name = paste0("./Data/tables/DTE_nopolyA","_","condition_nucleus", ".tsv")
+# res = res[!is.na(res$qval), ]
+# res = res[res$qval <= 0.01, ]
+# write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+# 
+# rm(lrt_results, wt_results, res)
 
 ```
 
 ```{r Model_RNA}
-
-so_RNA <- sleuth_fit(so_RNA, ~cell + condition, 'full')
-so_RNA <- sleuth_fit(so_RNA, ~cell, 'reduced')
-so_RNA <- sleuth_lrt(so_RNA, 'reduced', 'full')
-so_RNA = sleuth_wt(so_RNA, "conditionnucleus")
-wt_results = sleuth_results(so_RNA, 'conditionnucleus')
-lrt_results = sleuth_results(so_RNA, "reduced:full", "lrt")
-res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
-res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
-out_name = paste0("./Data/tables/DTE_RNA","_","condition_nucleus", ".tsv")
-res = res[!is.na(res$qval), ]
-res = res[res$qval <= 0.01, ]
-write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+# 
+# so_RNA <- sleuth_fit(so_RNA, ~cell + condition, 'full')
+# so_RNA <- sleuth_fit(so_RNA, ~cell, 'reduced')
+# so_RNA <- sleuth_lrt(so_RNA, 'reduced', 'full')
+# so_RNA = sleuth_wt(so_RNA, "conditionnucleus")
+# wt_results = sleuth_results(so_RNA, 'conditionnucleus')
+# lrt_results = sleuth_results(so_RNA, "reduced:full", "lrt")
+# res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+# res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+# out_name = paste0("./Data/tables/DTE_RNA","_","condition_nucleus", ".tsv")
+# res = res[!is.na(res$qval), ]
+# res = res[res$qval <= 0.01, ]
+# write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
 ```{r Model_polyA}
 # add in platform covariate since polyA samples were run on genome analyzer or hiseq
-so_polyA <- sleuth_fit(so_polyA, ~cell + platform + condition, 'full')
-so_polyA <- sleuth_fit(so_polyA, ~cell + platform, 'reduced')
-so_polyA <- sleuth_lrt(so_polyA, 'reduced', 'full')
-so_polyA = sleuth_wt(so_polyA, "conditionnucleus")
-wt_results = sleuth_results(so_polyA, 'conditionnucleus')
-lrt_results = sleuth_results(so_polyA, "reduced:full", "lrt")
-res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
-res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
-out_name = paste0("./Data/tables/DTE_polyA","_","condition_nucleus", ".tsv")
-res = res[!is.na(res$qval), ]
-res = res[res$qval <= 0.01, ]
-write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+# so_polyA <- sleuth_fit(so_polyA, ~cell + platform + condition, 'full')
+# so_polyA <- sleuth_fit(so_polyA, ~cell + platform, 'reduced')
+# so_polyA <- sleuth_lrt(so_polyA, 'reduced', 'full')
+# so_polyA = sleuth_wt(so_polyA, "conditionnucleus")
+# wt_results = sleuth_results(so_polyA, 'conditionnucleus')
+# lrt_results = sleuth_results(so_polyA, "reduced:full", "lrt")
+# res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+# res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+# out_name = paste0("./Data/tables/DTE_polyA","_","condition_nucleus", ".tsv")
+# res = res[!is.na(res$qval), ]
+# res = res[res$qval <= 0.01, ]
+# write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
 
 ```
 
+```{r DTE}
+## Modify Sleuths filter function to change req of 5 reads in 47% to 5 reads in 25% to pick up more cell type specific lncRNAs
+
+s2c$W1 = wts$W_1
+s2c$W2 = wts$W_2
+s2c$W3 = wts$W_3
+so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5), filter_fun = loose_filter )
+
+so <- sleuth_fit(so, ~ cell + Lib + W1+ W2 + W3 +  condition, 'full')
+so <- sleuth_fit(so, ~ cell + Lib + W1+ W2 + W3, 'reduced')
+so <- sleuth_lrt(so, 'reduced', 'full')
+so = sleuth_wt(so, "conditionnucleus")
+wt_results = sleuth_results(so, 'conditionnucleus')
+lrt_results = sleuth_results(so, "reduced:full", "lrt")
+res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+out_name = paste0("./Data/tables/DTE","_","condition_nucleus", ".tsv")
+res = res[!is.na(res$qval), ]
+res = res[res$qval <= 0.05, ]
+write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+
 ```{r Merge_results}
-  polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") 
-      
-  nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") 
-     
-  RNA = read_tsv("./Data/tables/DTE_RNA_condition_nucleus.tsv") 
-         
-  
-  df = as.data.frame(rbind(cbind(polyA$target_id, polyA$b, "polyA"),
-            cbind(nopolyA$target_id, nopolyA$b, "nopolyA"),
-            cbind(RNA$target_id, RNA$b, "RNA")))
-  colnames(df) = c("target_id","b","type")
-  df$b = as.numeric(as.character(df$b))
-  df$b = round(df$b, 3)
-  
-  nTotal =  94 # total number of samples
-  #  set weights for each dataset to integrate the log fold-change estimates from the 3 DE tests
-  df$wt = npolyA
-  df$wt[df$type == "nopolyA"] = nnopolyA
-  df$wt[df$type == "RNA"] = nRNA
-  df$target_id = as.character(df$target_id)
-  
-  
-  joined_df = matrix(nrow=length(unique(df$target_id)), ncol = 1)
-  rownames(joined_df) = unique(df$target_id)
-  colnames(joined_df) = "b"
-  for (i in rownames(joined_df)) {
-    trans = df[df$target_id == i, ]
-    wt_sum = sum(trans$b * trans$wt)/sum(trans$wt)
-    joined_df[ rownames(joined_df) == i, 1] = wt_sum
-  }
-  
-joined_df = as.data.frame(joined_df)
+#   polyA = read_tsv("./Data/tables/DTE_polyA_condition_nucleus.tsv") 
+#       
+#   nopolyA = read_tsv("./Data/tables/DTE_nopolyA_condition_nucleus.tsv") 
+#      
+#   RNA = read_tsv("./Data/tables/DTE_RNA_condition_nucleus.tsv") 
+#          
+#   
+#   df = as.data.frame(rbind(cbind(polyA$target_id, polyA$b, "polyA"),
+#             cbind(nopolyA$target_id, nopolyA$b, "nopolyA"),
+#             cbind(RNA$target_id, RNA$b, "RNA")))
+#   colnames(df) = c("target_id","b","type")
+#   df$b = as.numeric(as.character(df$b))
+#   df$b = round(df$b, 3)
+#   
+#   nTotal =  94 # total number of samples
+#   #  set weights for each dataset to integrate the log fold-change estimates from the 3 DE tests
+#   df$wt = npolyA
+#   df$wt[df$type == "nopolyA"] = nnopolyA
+#   df$wt[df$type == "RNA"] = nRNA
+#   df$target_id = as.character(df$target_id)
+#   
+#   
+#   joined_df = matrix(nrow=length(unique(df$target_id)), ncol = 1)
+#   rownames(joined_df) = unique(df$target_id)
+#   colnames(joined_df) = "b"
+#   for (i in rownames(joined_df)) {
+#     trans = df[df$target_id == i, ]
+#     wt_sum = sum(trans$b * trans$wt)/sum(trans$wt)
+#     joined_df[ rownames(joined_df) == i, 1] = wt_sum
+#   }
+#   
+# joined_df = as.data.frame(joined_df)
 ```
 
 ```{r, LncRNA_test, eval = FALSE}
@@ -244,17 +313,16 @@ lncRNAs = dplyr::filter(lncRNAs, type == "transcript")
 # remove trailing decimal
 lncRNAs$transcript_id = lapply(strsplit(lncRNAs$transcript_id, "\\."), "[[", 1)
 
-lnc_match = match(rownames(joined_df), lncRNAs$transcript_id)
-joined_df$transcript_biotype = lncRNAs$transcript_type[lnc_match]
-DElncRNAs = joined_df[!is.na(joined_df$transcript_biotype), ]
-joined_df = joined_df[is.na(joined_df$transcript_biotype), ]
+lnc_match = match(res$target_id, lncRNAs$transcript_id)
+res$transcript_biotype = lncRNAs$transcript_type[lnc_match]
+DElncRNAs = res[!is.na(res$transcript_biotype), ]
 
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype"), filters = "ensembl_transcript_id", values=rownames(joined_df))
-joined_df$transcript_biotype = map$transcript_biotype[match( rownames(joined_df), map$ensembl_transcript_id) ]
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype"), filters = "ensembl_transcript_id", values=res$target_id)
+res$transcript_biotype = map$transcript_biotype[match( res$target_id, map$ensembl_transcript_id) ]
 
-pc = joined_df[joined_df$transcript_biotype == "protein_coding", ]
+pc = res[res$transcript_biotype == "protein_coding", ]
 
 
 pdf("./Figures/LncRNA_PC_density.pdf")
@@ -269,20 +337,19 @@ ggplot(data= DElncRNAs) +
 
 
 ## Check number of nuclear and cytosolic lncRNAs
-library(gridExtra)
-lncnum = data.frame("LncRNAs" = nrow(DElncRNAs), Nuclear = sum(DElncRNAs$b > 3), Cytosol = sum(DElncRNAs$b < -1), row.names = NULL)
-grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
+# library(gridExtra)
+# lncnum = data.frame("LncRNAs" = nrow(DElncRNAs), Nuclear = sum(DElncRNAs$b > 0), Cytosol = sum(DElncRNAs$b < 0), row.names = NULL)
+# grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
 dev.off()
 
-seq = biomaRt::getSequence(id = rownames(DElncRNAs), type="ensembl_transcript_id", seqType = "cdna", mart = mart)
-DElncRNAs$cdna = seq$cdna[match(rownames(DElncRNAs), seq$ensembl_transcript_id)]
+seq = biomaRt::getSequence(id = DElncRNAs$target_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+DElncRNAs$cdna = seq$cdna[match(DElncRNAs$target_id, seq$ensembl_transcript_id)]
 #lncRNAs = lncRNAs[, -2]
 
 DElncRNAs$transcript_length = as.numeric(lapply(DElncRNAs$cdna, nchar))
 DElncRNAs = DElncRNAs[DElncRNAs$transcript_length >= 200, ]
 saveRDS(DElncRNAs, "./Data/DE_lncRNAs.rds")
 
-seq = biomaRt::getSequence(id = lncRNAs$transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 ```
 
 ```{r, genome_lncRNAs, cache = TRUE}
@@ -479,11 +546,11 @@ return(df)
 }
 Supervised = RNABP_Motif_add(Supervised)
 #colnames to drop
-drop_cols = which(colSums(Supervised[ ,5:ncol(Supervised)]) == 0)
-Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
-
-Supervised = Supervised[, -c(2,3)]
-Super$transcript_length = as.numeric(Super$transcript_length)
+# drop_cols = which(colSums(Supervised[ ,5:ncol(Supervised)]) == 0)
+# Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
+# 
+# Supervised = Supervised[, -c(2,3)]
+# Super$transcript_length = as.numeric(Super$transcript_length)
 saveRDS(Supervised, "./Data/Supervised_train.rds")
 set.seed(54321)
 inTrain = sample(1:nrow(Supervised), size = 0.6*nrow(Supervised))
