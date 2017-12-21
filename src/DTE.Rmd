@@ -29,6 +29,7 @@ library(stringr)
 library(sleuth)
 library(dplyr)
 library(ggplot2)
+library(RUVSeq)
 ```
 
 
@@ -84,8 +85,8 @@ write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
 
 EDA of all samples
 ```{r Total_PCA, cache = TRUE}
-## Modify Sleuths basic_filter function to change req of 5 reads in 47% of samples to ==> 5 reads in 4 samples (4/88) to pick up more cell type specific lncRNAs
-loose_filter <- function(row, min_reads = 5, min_prop = 0.04545455) {
+## Modify Sleuths basic_filter function to change req of 5 reads in 47% of  20% to pick up more #cell-type specific lncRNAs
+ loose_filter <- function(row, min_reads = 5, min_prop = .2) {
   mean(row >= min_reads) >= min_prop
 }
 
@@ -97,19 +98,6 @@ plot_pca(so, color_by = "condition",  text_labels = TRUE) +ggtitle("Sleuth PCA -
 
 plot_pca(so, color_by = "Lib",  text_labels = TRUE) +ggtitle("Sleuth PCA - Library type") + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
 
-## Check RLE and PCA  plots after Normalization and filtering
-Expr = so$obs_norm_filt %>%  dplyr::select(target_id, sample, est_counts)
-Emat = tidyr::spread(Expr, key  = sample, est_counts)
-Emat = as.matrix(Emat[,-1])
-
-s2c = s2c[order(s2c$condition), ]
-
-Emat = Emat[ ,match(s2c$sample, colnames(Emat))]
-plotRLE(Emat, col = as.numeric(as.factor(s2c$condition))+2 , xlab = "Samples", ylab = "Relative Log Expression", outline = FALSE, ylim =c(-6,6))
-legend(x = "topright",legend = c("Cytosol","Nuclear"), fill=c("green","blue"))
-
-plotPCA(Emat, cex =2, col = as.numeric(as.factor(s2c$condition)), k=3, pch = as.numeric(as.factor(s2c$Lib)))
-
 ```
 
 The samples appear to cluster rather tightly by library type. Even after between sample normalization and filtering there is a large amount of variance in the sample counts and PC1 appears to represent library type rather than condition indicating the need for further normalization by ERCC spikeins. 
@@ -117,7 +105,7 @@ The samples appear to cluster rather tightly by library type. Even after between
 
 ```{r RUVg}
 # get raw counts
-Expr = so$obs_raw %>%  dplyr::select(target_id, sample, est_counts)
+Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
 Emat = tidyr::spread(Expr, key  = sample, est_counts)
 rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
 Emat = as.matrix(Emat[,-1])
@@ -132,29 +120,42 @@ dim(Emat)
 ## need to round est_counts to integer for RUVseq
 Emat = round(Emat)
 
-## USE RUVg to normalize samples based on control spikeins
-# Code adapted from RUVSeq vignette
-filter <- apply(Emat, 1, function(x) length(x[x>2])>=2) ##remove non-expressed genes (2 countts in 2 samples)
-filtered <- Emat[filter,]
-trans <- rownames(filtered)[grep("^ENS", rownames(filtered))]
-spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
+# Filter transcripts but not spikeins
+filtered = Emat[grep("^ENS", rownames(Emat)), ]
+filter <- apply(filtered, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (2 counts in 4 samples)
+filtered <- filtered[filter,]
 
-plotRLE(filtered, outline=FALSE, ylim=c(-6, 6), col=as.numeric(as.factor(s2c$condition))+2)
-plotPCA(filtered, col=as.numeric(as.factor(s2c$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c$Lib)))
+filtered = rbind(filtered, Emat[grep("^ERCC", rownames(Emat)), ])
+
+spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
+# Number of spikeins
+length(spikes)
+
+
 
 x <- as.factor(s2c$condition)
 
 set <- newSeqExpressionSet(as.matrix(filtered),
                            phenoData = data.frame(x, row.names=colnames(filtered)))
 
-##RUVg
+## USE RUVg to normalize samples based on control spikeins
 set1 <- RUVg(set, spikes, k=3)
 wts = pData(set1)[,2:ncol(pData(set1))]
 
-plotRLE(set1, outline=FALSE, ylim=c(-6, 6), col= as.numeric(x)+2)
+par(mfrow=c(1,2))
+plotRLE(filtered, outline=FALSE, ylim=c(-6, 6), col=as.numeric(as.factor(s2c$condition))+2, main = "Sleuth", names = NULL)
+plotRLE(set1, outline=FALSE, ylim=c(-6, 6), col= as.numeric(x)+2, main = "RUVg", names = NULL)
 
-
+par(mfrow=c(1,2))
+plotPCA(filtered, col=as.numeric(as.factor(s2c$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c$Lib)), main = "Sleuth")
 plotPCA(set1, col=as.numeric(as.factor(s2c$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c$Lib)), main="RUVg")
+
+##reorder wts to match s2c and add to sleuth
+wts = wts[match(so$sample_to_covariates$sample, rownames(wts)), ]
+(rownames(wts) == so$sample_to_covariates$sample)
+so$sample_to_covariates$W1 = wts$W_1
+so$sample_to_covariates$W2 = wts$W_2
+so$sample_to_covariates$W3 = wts$W_3
 
 
 ```
@@ -244,11 +245,6 @@ After normalization using spikeins, PC1 now represents subcellular fraction inst
 ```{r DTE}
 ## Modify Sleuths filter function to change req of 5 reads in 47% to 5 reads in 25% to pick up more cell type specific lncRNAs
 
-s2c$W1 = wts$W_1
-s2c$W2 = wts$W_2
-s2c$W3 = wts$W_3
-so = sleuth_prep(s2c, transformation_function = function(x) log2(x+0.5), filter_fun = loose_filter )
-
 so <- sleuth_fit(so, ~ cell + Lib + W1+ W2 + W3 +  condition, 'full')
 so <- sleuth_fit(so, ~ cell + Lib + W1+ W2 + W3, 'reduced')
 so <- sleuth_lrt(so, 'reduced', 'full')
@@ -317,6 +313,7 @@ lnc_match = match(res$target_id, lncRNAs$transcript_id)
 res$transcript_biotype = lncRNAs$transcript_type[lnc_match]
 DElncRNAs = res[!is.na(res$transcript_biotype), ]
 
+library(biomaRt)
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
 map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype"), filters = "ensembl_transcript_id", values=res$target_id)
@@ -325,7 +322,7 @@ res$transcript_biotype = map$transcript_biotype[match( res$target_id, map$ensemb
 pc = res[res$transcript_biotype == "protein_coding", ]
 
 
-pdf("./Figures/LncRNA_PC_density.pdf")
+#pdf("./Figures/LncRNA_PC_density.pdf")
 ggplot(data= DElncRNAs) +
   geom_density(data = pc, aes(x = b), col = "blue", lwd = 1.5) + 
   geom_density(aes(x = b), col = "red", lwd = 2) +
@@ -340,7 +337,7 @@ ggplot(data= DElncRNAs) +
 # library(gridExtra)
 # lncnum = data.frame("LncRNAs" = nrow(DElncRNAs), Nuclear = sum(DElncRNAs$b > 0), Cytosol = sum(DElncRNAs$b < 0), row.names = NULL)
 # grid.table(lncnum, vp = grid::viewport(x = 0.4, y = 0.9), rows = NULL, theme = ttheme_default(base_size = 16))
-dev.off()
+#dev.off()
 
 seq = biomaRt::getSequence(id = DElncRNAs$target_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 DElncRNAs$cdna = seq$cdna[match(DElncRNAs$target_id, seq$ensembl_transcript_id)]
@@ -397,37 +394,17 @@ saveRDS(lncRNAs, "./Data/genomic_lncRNAs.rds")
 ```
 
 ```{r heatmap}
-RNA_mat = so_RNA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
-RNAdf = tidyr::spread(RNA_mat, key  = sample, tpm)
+library(pheatmap)
 
-IDs = unlist(lapply(strsplit(RNAdf$target_id, "\\."), "[[", 1))
+counts = normCounts(set1)
+rownames(counts) = unlist(lapply(str_split(rownames(counts),"\\."), "[[", 1))
 
-defilt = match(IDs, rownames(DElncRNAs))
+counts = counts[!is.na(match(rownames(counts), DElncRNAs$target_id)), ]
 
-RNAdf = RNAdf[!is.na(defilt), ]
+annot = data.frame(condition = s2c$condition, Library = s2c$Lib)
+rownames(annot) = s2c$sample
+pheatmap(counts, annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE)
 
-nopoly_mat = so_nopolyA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
-nopolydf = tidyr::spread(nopoly_mat, key  = sample, tpm) %>% filter(!is.na(defilt))   
-
-poly_mat = so_polyA$obs_norm %>%  dplyr::select(target_id, sample, tpm)
-polydf = tidyr::spread(poly_mat, key  = sample, tpm) %>% filter(!is.na(defilt))   
-
-rm(RNA_mat, nopoly_mat, poly_mat)
-annot = as.data.frame(so_RNA$sample_to_covariates[ ,c(2)])
-rownames(annot) = so_RNA$sample_to_covariates$sample
-pheatmap(RNAdf[ ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE)
-
-annot = as.data.frame(so_nopolyA$sample_to_covariates[ ,c(2,3)])
-rownames(annot) = so_nopolyA$sample_to_covariates$sample
-annot = annot[order(annot$condition, annot$cell), ]
-nopolydf = nopolydf[ , c(1, match( rownames(annot), colnames(nopolydf) ))]
-pheatmap(nopolydf[!is.na(DE_match) ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE, cluster_cols = FALSE)
-
-annot = as.data.frame(so_polyA$sample_to_covariates[ ,c(2,3)])
-rownames(annot) = so_polyA$sample_to_covariates$sample
-annot = annot[order(annot$condition, annot$cell), ]
-polydf = polydf[ , c(1,match( rownames(annot), colnames(polydf) ))]
-pheatmap(polydf[ ,-1], annotation_col = annot,  scale = "row", cluster_rows = FALSE, labels_row = "",annotation_names_col = FALSE, cluster_cols = FALSE)
 ```
 
 ```{r Kmer_add, eval = FALSE}
@@ -437,7 +414,7 @@ set.seed(54321)
 
 DElncRNAs = readRDS("./Data/DE_lncRNAs.rds")
 
-genome = readRDS("./Data/genomic_lncRNAs.rds")
+#genome = readRDS("./Data/genomic_lncRNAs.rds")
 
 Kmer_add = function(df, k){
   library(Biostrings)
@@ -468,32 +445,32 @@ Kmer_add = function(df, k){
 }
 ############################################
 
-Kmer_filt = function(df, topN){
-#takes df with cols[6:ncol(df)] as kmer-counts and ranks kmers based on p-value from Spearman Correlation with L2FC selecting 1:topN of kmers
-  library(broom)
-
-  test_vals =c()
-
-
-  for ( i in 6:ncol(df)) {
-    vals = cor(df[ , i], df$b, method = "spearman")
-    # vals = cor(df[ , i], df$b, method = "spearman")
-    test_vals = c(test_vals, abs(vals ))
-  }
-  names(test_vals) = colnames(df[6:ncol(df)])
-
-  #test_vals = p.adjust(test_vals, "fdr")
-  test_vals = sort(test_vals, decreasing = TRUE)
-
-  kmer_mat = match(names(test_vals), colnames(df[ ,6:ncol(df)]) )
-
-  filt = kmer_mat[1:topN]
-
-  filt = c(1:5, filt+5)
-
-  return(filt)
-
-}
+# Kmer_filt = function(df, topN){
+# #takes df with cols[6:ncol(df)] as kmer-counts and ranks kmers based on p-value from Spearman Correlation with L2FC selecting 1:topN of kmers
+#   library(broom)
+# 
+#   test_vals =c()
+# 
+# 
+#   for ( i in 6:ncol(df)) {
+#     vals = cor(df[ , i], df$b, method = "spearman")
+#     # vals = cor(df[ , i], df$b, method = "spearman")
+#     test_vals = c(test_vals, abs(vals ))
+#   }
+#   names(test_vals) = colnames(df[6:ncol(df)])
+# 
+#   #test_vals = p.adjust(test_vals, "fdr")
+#   test_vals = sort(test_vals, decreasing = TRUE)
+# 
+#   kmer_mat = match(names(test_vals), colnames(df[ ,6:ncol(df)]) )
+# 
+#   filt = kmer_mat[1:topN]
+# 
+#   filt = c(1:5, filt+5)
+# 
+#   return(filt)
+# 
+# }
 
 
 Supervised = Kmer_add(DElncRNAs, k = 5)
@@ -503,10 +480,10 @@ Supervised = Kmer_add(DElncRNAs, k = 5)
 #Supervised[ ,6:ncol(Supervised)] = Supervised[ ,6:ncol(Supervised)]/Supervised$transcript_length
 saveRDS(Supervised, "./Data/Supervised_kmer.rds")
 
-Unsupervised = Kmer_add(genome, k = 5)
+#Unsupervised = Kmer_add(genome, k = 5)
 #Unsupervised = Unsupervised[ , filt]
 #Unsupervised[ ,6:ncol(Unsupervised)] = Unsupervised[ ,6:ncol(Unsupervised)]/Unsupervised$transcript_length
-saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
+#saveRDS(Unsupervised, "./Data/Unsupervised_kmer.rds")
 ```
 
 ```{r, RNA_motifs, eval = FALSE}
@@ -527,15 +504,16 @@ for (i in 1:mot_num){
         mot = t(mot)
 # rownames(mot)
 # [1] "A" "C" "G" "U"
-## Motifs are in units of RNA so we must complement to DNA (A -> T, C -> G, G -> C, U -> A)
+## Motifs are in units of RNA so to get cDNA must reverse complement
+# complement to DNA (A -> T, C -> G, G -> C, U -> A) then reverse columns
         rownames(mot) = c("T","G","C", "A")
-        mot = mot[order(rownames(mot)), ]
+        mot = mot[order(rownames(mot)), ncol(mot):1 ]
         #print(ncol(mot))
         
         for (j in 1:nrow(df)){
         #len = df$transcript_length[j]
         seq = df$cdna[j]
-        counts = countPWM(mot, seq, min.score = "60%") 
+        counts = countPWM(mot, seq, min.score = "80%") 
         mat_mot[j,i] = counts
         }
     }    
@@ -546,11 +524,13 @@ return(df)
 }
 Supervised = RNABP_Motif_add(Supervised)
 #colnames to drop
-# drop_cols = which(colSums(Supervised[ ,5:ncol(Supervised)]) == 0)
-# Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
+drop_cols = which(colSums(Supervised[ ,19:ncol(Supervised)]) == 0)
+Supervised = Supervised[ ,- match(names(drop_cols), colnames(Supervised))]
 # 
 # Supervised = Supervised[, -c(2,3)]
 # Super$transcript_length = as.numeric(Super$transcript_length)
+Supervised = Supervised[!duplicated(Supervised), ]
+rownames(Supervised) = Supervised$target_id
 saveRDS(Supervised, "./Data/Supervised_train.rds")
 set.seed(54321)
 inTrain = sample(1:nrow(Supervised), size = 0.6*nrow(Supervised))
@@ -570,66 +550,82 @@ saveRDS(Valid, "./Data/Validation_set.rds")
 saveRDS(Test, "./Data/Test_set.rds")
 
 
-Unsupervised = RNABP_Motif_add(Unsupervised)
-Unsupervised = Unsupervised[ ,- match(names(drop_cols), colnames(Unsupervised))]
-
-Unsupervised = Unsupervised[ , -c(2,3)]
-## remove any instances in the testing or validation set from the unsupervised
-drop_vals = c(rownames(Valid, Test))
-Unsupervised = Unsupervised[is.na(match(Unsupervised$transcript_id, drop_vals)), ]
-saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
-
-```
-
-
-```{r, eval = FALSE}
-
-set.seed(54321)
-
-Supervised = Supervised[ , -c(5 )]
-#Supervised$b = round(Supervised$b, 2)
-
-Supervised$transcript_biotype = as.factor(Supervised$transcript_biotype)
-#Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ]
-#Supervised$gene_biotype = droplevels(Supervised$gene_biotype)
-# Supervised$Localized = as.factor(Supervised$Localized)
-
-inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised) )
-train = Supervised[inTrain, ]
-test = Supervised[-inTrain, ]
-
-#library(caret)
-library(randomForest)
-
-
-rf = randomForest(x = train[ , -1],
-           y = train$b,
-           #trControl = control,
-           #tuneGrid = tunegrid,
-           ntree = 501)
-print(rf)
-plot(rf)
-#save.image("./Data/Raw_RF.RData")
-saveRDS(rf, "./Data/Raw_RF.rds")
-
-Loc =rep("Nuclear", nrow(train) )
-Loc[train$b < 0] = "Cytosol"
-Loc = as.factor(Loc)
-
-rf2 = randomForest(x= train[ ,-1], 
-                   y = Loc,
-                   ntree = 501)
-
-
-
-pred = predic
-
-test_vals = predict(rf, test)
-cor.test(test_vals, test$b)
-sqrt(mean((test_vals - test$b)^2))
+# Unsupervised = RNABP_Motif_add(Unsupervised)
+# Unsupervised = Unsupervised[ ,- match(names(drop_cols), colnames(Unsupervised))]
+# 
+# Unsupervised = Unsupervised[ , -c(2,3)]
+# ## remove any instances in the testing or validation set from the unsupervised
+# drop_vals = c(rownames(Valid, Test))
+# Unsupervised = Unsupervised[is.na(match(Unsupervised$transcript_id, drop_vals)), ]
+# saveRDS(Unsupervised, "./Data/Unsupervised_train.rds")
 
 ```
 
+
+<!-- ```{r, eval = FALSE} -->
+
+<!-- set.seed(54321) -->
+
+<!-- Supervised = Supervised[ , -c(5 )] -->
+<!-- #Supervised$b = round(Supervised$b, 2) -->
+
+<!-- Supervised$transcript_biotype = as.factor(Supervised$transcript_biotype) -->
+<!-- #Supervised = Supervised[Supervised$gene_biotype != "non_coding" & Supervised$gene_biotype != "macro_lncRNA", ] -->
+<!-- #Supervised$gene_biotype = droplevels(Supervised$gene_biotype) -->
+<!-- # Supervised$Localized = as.factor(Supervised$Localized) -->
+
+<!-- inTrain = sample(1:nrow(Supervised), .7*nrow(Supervised) ) -->
+<!-- train = Supervised[inTrain, ] -->
+<!-- test = Supervised[-inTrain, ] -->
+
+<!-- #library(caret) -->
+<!-- library(randomForest) -->
+
+
+<!-- rf = randomForest(x = Train[ , -c(1:17)], -->
+<!--            y = Train$b, -->
+<!--            trControl = control, -->
+<!--            tuneGrid = tunegrid, -->
+<!--            ntree = 501) -->
+<!-- print(rf) -->
+<!-- plot(rf) -->
+<!-- #save.image("./Data/Raw_RF.RData") -->
+<!-- saveRDS(rf, "./Data/Raw_RF.rds") -->
+
+<!-- Loc =rep("Nuclear", nrow(train) ) -->
+<!-- Loc[train$b < 0] = "Cytosol" -->
+<!-- Loc = as.factor(Loc) -->
+
+<!-- rf2 = randomForest(x= train[ ,-1],  -->
+<!--                    y = Loc, -->
+<!--                    ntree = 501) -->
+
+
+
+<!-- pred = predic -->
+
+<!-- test_vals = predict(rf, Valid) -->
+<!-- cor.test(test_vals, Valid$b) -->
+<!-- rf = sqrt(mean((test_vals - Valid$b)^2)) -->
+
+<!-- ``` -->
+
+<!-- ```{r NN} -->
+
+<!-- RF_model = caret::train(x = Train[ ,-c(1:17)],  -->
+<!--                                 y = Train$b, -->
+<!--                                 model = "rf", -->
+<!--                                 ntree = 100) -->
+
+<!-- NN_model = caret::train(x = Train[ ,-c(1:17)],  -->
+<!--                                 y = Train$b, -->
+<!--                                 model = "nnet", -->
+<!--                             preProcess = c('center', 'scale'), -->
+<!--                                 tuneGrid=expand.grid(size=c(1500)) -->
+
+
+
+<!-- ``` -->
 
 
 
