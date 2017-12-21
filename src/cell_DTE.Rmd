@@ -1,0 +1,169 @@
+---
+title: "cell_DTE"
+author: "Brian Gudenas"
+date: "December 21, 2017"
+output: word_document
+---
+
+# Differential Transcript Expression 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("..")
+```
+
+```{r Libraries}
+library(readr)
+library(stringr)
+library(sleuth)
+library(dplyr)
+library(ggplot2)
+library(RUVSeq)
+```
+
+
+```{r metadata}
+## load Sample Metadata 
+samples = read_tsv("./Data/Meta/metadata.tsv")
+colnames(samples) = make.names(colnames(samples))
+Pair = read.table("./Data/Meta/Pair_map.txt", sep="\t", header = TRUE)
+
+samples = samples[!is.na(match(samples$File.accession, Pair$Pair1)), ]
+
+samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" | samples$Biosample.subcellular.fraction.term.name == "cytosol", ]
+
+samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
+samples$Lib_method = paste0(samples$Library.made.from,"_", samples$Library.depleted.in)
+
+## Remove any samples with missing ERCC spikeins
+samples = samples[!grepl("spikeins", samples$Audit.WARNING), ]
+
+
+s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
+
+## Remove any samples with less than 4 total samples
+s2c = s2c[is.na(match(s2c$cell, names(table(s2c$cell))[table(s2c$cell) < 4] ) ),   ]
+
+filespath = file.path(getwd(), "/Data/Kallisto/Quant", s2c$sample)
+s2c = dplyr::mutate(s2c, path = filespath)
+
+## Total samples
+nrow(s2c)
+## Samples per fraction
+table(s2c$condition)
+## Samples per Library type
+table(s2c$Lib)
+## Cell types
+table(s2c$cell)
+
+## Kallisto.o* is the standard output from the kallisto quant call for all samples
+output = read.delim(file = "./Data/Kallisto/Kallisto.o2139569", sep = "\n")
+pairmap = read.delim(file ="./Data/Meta/Pair_map.txt")
+
+alignments = output[grepl("processed", output[,1]), ]
+
+
+pairmap$total_reads = as.numeric(str_trim(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 1)), " reads"), "[[", 1)), "processed"),"[[",2)),",","")))
+pairmap$reads_aligned = as.numeric(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 2)), " reads"), "[[", 1)), ",",""))
+
+pairmap$percent_aligned = pairmap$reads_aligned/pairmap$total_reads*100
+s2c$total_reads = pairmap$total_reads[match(s2c$sample, pairmap$Pair1)]
+s2c$reads_aligned = pairmap$reads_aligned[match(s2c$sample, pairmap$Pair1)]
+
+## total aligned reads
+sum(s2c$reads_aligned)
+
+rm(alignments, samples, pairmap, Pair, output)
+write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
+```
+
+```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
+master =c()
+for ( i in unique(s2c$cell)){
+  s2c_tmp = dplyr::filter(s2c, cell == i) %>% arrange(sample)
+  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5))
+  
+  lds = plot_pc_variance(so)
+ 
+  plot_pca(so, color_by = "condition",  text_labels = TRUE) +ggtitle(i) + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =",   round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+  
+  
+  ## if more than 4 samples in cell-type then it indicates multiple RNA-seq library protocols / platforms
+  ## therefore we normalize these cases by ERCC spikeins
+  if (nrow(s2c_tmp) > 4) {
+    Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
+    Emat = tidyr::spread(Expr, key  = sample, est_counts)
+    rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
+    Emat = as.matrix(Emat[,-1])
+    
+    dim(Emat)
+  
+    ## need to round est_counts to integer for RUVseq
+    Emat = round(Emat)
+    
+    # Filter transcripts 
+    filter <- apply(Emat, 1, function(x) length(x[x > 2]) >= 2) ##remove non-expressed transcripts (2 counts in 2 samples)
+    filtered <- Emat[filter,]
+    
+    
+    spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
+    # Number of spikeins
+    length(spikes)
+    x <- as.factor(s2c_tmp$condition)
+  
+    set <- newSeqExpressionSet(as.matrix(filtered),
+                             phenoData = data.frame(x, row.names=colnames(filtered)))
+    
+    s2c_tmp = s2c_tmp %>%  arrange(s2c_tmp$sample)
+  
+    ## USE RUVg to normalize samples based on control spikeins
+    set1 <- RUVg(set, spikes, k=1)
+    wts = pData(set1)[,2:ncol(pData(set1))]
+    
+    plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i)
+    plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i))
+    
+    so$sample_to_covariates$W1 = wts
+    
+    ## Use W1 as batch
+    so <- sleuth_fit(so, ~ W1 + condition, 'full')
+    so <- sleuth_fit(so, ~ W1, 'reduced')
+    so <- sleuth_lrt(so, 'reduced', 'full')
+    so = sleuth_wt(so, "conditionnucleus")
+    wt_results = sleuth_results(so, 'conditionnucleus')
+    lrt_results = sleuth_results(so, "reduced:full", "lrt")
+    res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+    res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+    out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
+    res = res[!is.na(res$qval), ]
+    res = res[res$qval <= 0.05, ]
+    write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+    res$cell = i
+    
+    master = rbind(master,res)
+  
+    
+  } else {
+    so <- sleuth_fit(so, ~ condition, 'full')
+    so <- sleuth_fit(so, ~ 1, 'reduced')
+    so <- sleuth_lrt(so, 'reduced', 'full')
+    so = sleuth_wt(so, "conditionnucleus")
+    wt_results = sleuth_results(so, 'conditionnucleus')
+    lrt_results = sleuth_results(so, "reduced:full", "lrt")
+    res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+    res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+    out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
+    res = res[!is.na(res$qval), ]
+    res = res[res$qval <= 0.05, ]
+    write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+    res$cell = i
+    
+    master = rbind(master,res)
+  }
+  
+}
+write.table(master, "./Data/tables/Master.csv", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+.
