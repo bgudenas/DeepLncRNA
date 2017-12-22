@@ -6,24 +6,24 @@ output: word_document
 ---
 
 # Differential Transcript Expression 
-
+Here we identify transcripts differentially localized in the cytosolic versus nuclear subcellular fractions from fractionated immortalized cell line RNA-seq data from ENCODE.
 
 ```{r setup, include=FALSE}
+library(knitr)
 knitr::opts_chunk$set(echo = TRUE)
-setwd("..")
+opts_knit$set(root.dir = "..")
 ```
 
-```{r Libraries}
+```{r Libraries, message = FALSE, warning = FALSE}
 library(readr)
 library(stringr)
 library(sleuth)
 library(dplyr)
-library(ggplot2)
 library(RUVSeq)
 ```
 
 
-```{r metadata}
+```{r metadata, message = FALSE, warning = FALSE}
 ## load Sample Metadata 
 samples = read_tsv("./Data/Meta/metadata.tsv")
 colnames(samples) = make.names(colnames(samples))
@@ -74,9 +74,13 @@ s2c$reads_aligned = pairmap$reads_aligned[match(s2c$sample, pairmap$Pair1)]
 ## total aligned reads
 sum(s2c$reads_aligned)
 
-rm(alignments, samples, pairmap, Pair, output)
+#rm(alignments, samples, pairmap, Pair, output)
 write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
 ```
+
+Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we normalize these samples based on ERCC control spike ins, 
+otherwise we do the standard DE test. For each cell type we plot the PCA of the sleuth normalized counts and if available, the RUVg spike in normalized counts. Lastly, we use the bonferroni correction to adjust our alpha level for the number of cell types testes, resulting in a q-value threshold  of `r 0.05/length(unique(s2c$cell))`
+
 
 ```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
 master =c()
@@ -84,14 +88,10 @@ for ( i in unique(s2c$cell)){
   s2c_tmp = dplyr::filter(s2c, cell == i) %>% arrange(sample)
   so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5))
   
-  lds = plot_pc_variance(so)
- 
-  plot_pca(so, color_by = "condition",  text_labels = TRUE) +ggtitle(i) + theme(text = element_text(size=20)) + xlab(paste("PC1","%Var =",   round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
   
-  
-  ## if more than 4 samples in cell-type then it indicates multiple RNA-seq library protocols / platforms
-  ## therefore we normalize these cases by ERCC spikeins
-  if (nrow(s2c_tmp) > 4) {
+  ## if more than 1  RNA-seq library protocols were used
+  ## we normalize these cases by ERCC spikeins
+if (length(unique(s2c_tmp$Lib))  > 1 ) {
     Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
     Emat = tidyr::spread(Expr, key  = sample, est_counts)
     rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
@@ -103,7 +103,7 @@ for ( i in unique(s2c$cell)){
     Emat = round(Emat)
     
     # Filter transcripts 
-    filter <- apply(Emat, 1, function(x) length(x[x > 2]) >= 2) ##remove non-expressed transcripts (2 counts in 2 samples)
+    filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts in 2 samples)
     filtered <- Emat[filter,]
     
     
@@ -121,19 +121,18 @@ for ( i in unique(s2c$cell)){
     set1 <- RUVg(set, spikes, k=1)
     wts = pData(set1)[,2:ncol(pData(set1))]
     
-    plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i)
-    plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i))
+    EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
+    EDASeq::plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i) )
     
     so$sample_to_covariates$W1 = wts
     
     ## Use W1 as batch
     so <- sleuth_fit(so, ~ W1 + condition, 'full')
     so <- sleuth_fit(so, ~ W1, 'reduced')
-    so <- sleuth_lrt(so, 'reduced', 'full')
+    #so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
     wt_results = sleuth_results(so, 'conditionnucleus')
-    lrt_results = sleuth_results(so, "reduced:full", "lrt")
-    res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+    res =wt_results[!is.na(wt_results$qval), ]
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
     res = res[!is.na(res$qval), ]
@@ -145,25 +144,41 @@ for ( i in unique(s2c$cell)){
   
     
   } else {
+    
+     Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
+    Emat = tidyr::spread(Expr, key  = sample, est_counts)
+    rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
+    Emat = as.matrix(Emat[,-1])
+    #dim(Emat)
+    ## need to round est_counts to integer for RUVseq
+    Emat = round(Emat)
+    
+    # Filter transcripts 
+    filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts     in 2 samples)
+    filtered <- Emat[filter,]   
+    EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
+    
     so <- sleuth_fit(so, ~ condition, 'full')
     so <- sleuth_fit(so, ~ 1, 'reduced')
     so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
     wt_results = sleuth_results(so, 'conditionnucleus')
-    lrt_results = sleuth_results(so, "reduced:full", "lrt")
-    res = merge(lrt_results, wt_results[ , c("target_id", "b", "se_b", "mean_obs")], on = "target_id", sort = FALSE)
+    res =wt_results[!is.na(wt_results$qval), ]
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
     res = res[!is.na(res$qval), ]
     res = res[res$qval <= 0.05, ]
     write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
     res$cell = i
-    
+
     master = rbind(master,res)
   }
-  
+
 }
-write.table(master, "./Data/tables/Master.csv", sep = "\t", quote = FALSE, row.names = FALSE)
+## filter master qvals based on number of cell types tested
+master = master[master$qval <= (0.05/length(unique(s2c$cell))), ]
+
+write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
 ```
 
 .
