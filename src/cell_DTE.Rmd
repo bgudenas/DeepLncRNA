@@ -5,7 +5,7 @@ date: "December 21, 2017"
 output: word_document
 ---
 
-# Differential Transcript Expression 
+#1. Differential Transcript Expression 
 Here we identify transcripts differentially localized in the cytosolic versus nuclear subcellular fractions from fractionated immortalized cell line RNA-seq data from ENCODE.
 
 ```{r setup, include=FALSE}
@@ -78,8 +78,9 @@ sum(s2c$reads_aligned)
 write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
 ```
 
-Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we normalize these samples based on ERCC control spike ins, 
-otherwise we do the standard DE test. For each cell type we plot the PCA of the sleuth normalized counts and if available, the RUVg spike in normalized counts. Lastly, we use the bonferroni correction to adjust our alpha level for the number of cell types testes, resulting in a q-value threshold  of `r 0.05/length(unique(s2c$cell))`
+## DTE by cell type
+Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we normalize these samples based on ERCC control spike ins,
+otherwise we do the standard DE test. For each cell type we plot the PCA of the sleuth normalized counts and if available, the RUVg spike in normalized counts. Lastly, we use the bonferroni correction to adjust the alpha level for the number of cell types tested, resulting in a q-value threshold  of `r 0.05/length(unique(s2c$cell))`
 
 
 ```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
@@ -182,3 +183,112 @@ write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
 ```
 
 .
+```{r}
+
+seq = biomaRt::getSequence(id = DElncRNAs$target_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+DElncRNAs$cdna = seq$cdna[match(DElncRNAs$target_id, seq$ensembl_transcript_id)]
+#lncRNAs = lncRNAs[, -2]
+
+DElncRNAs$transcript_length = as.numeric(lapply(DElncRNAs$cdna, nchar))
+DElncRNAs = DElncRNAs[DElncRNAs$transcript_length >= 200, ]
+saveRDS(DElncRNAs, "./Data/DE_lncRNAs.rds")
+```
+
+
+```{r}
+Kmer_add = function(df, k){
+  library(Biostrings)
+  #df must contain "cdna" column
+  #k is largest int of 
+  kmer_mat = matrix( ncol = sum(4^seq(2, k)) , nrow = nrow(df), data =0)
+  
+  for (i in 1:nrow(df)){
+    seq =DNAString(df$cdna[i])
+   # len = df$transcript_length[i]
+    index = 0
+    for (j in 2:k) {
+    kmers = oligonucleotideFrequency(seq, j)
+    ind2 = index
+    kmer_mat[i, (index + 1): (ind2 + (4^j) ) ] = as.vector(kmers)
+    index = index + (4^j)
+    }
+  }
+  
+  nams =c()
+  for (i in 2:k){
+    nams =c(nams, names(oligonucleotideFrequency(seq, i)) )
+  
+  }
+  colnames(kmer_mat) = nams
+  df = cbind(df, kmer_mat)
+  return(df)
+}
+
+
+df = Kmer_add(df, k = 5)
+
+
+RNABP_Motif_add = function(df){
+  library(Biostrings)
+  
+motifs_dir = file.path("./Data/motifs/Homo_sapiens_2017_09_07_CISBP/pwms_all_motifs")
+mot_num = length(list.files(motifs_dir))
+
+mat_mot = matrix(nrow = nrow(df), ncol = mot_num , data = 0)
+
+for (i in 1:mot_num){
+    fils = list.files(motifs_dir)[i]
+    #some motif files from CISBP are completely empty and will throw an error so i added a try-catch here
+    mot = try(read.table(paste0(motifs_dir, "/", fils), sep = "\t", row.names = 1, header = TRUE ), silent = FALSE)
+    if (class(mot) != "try-error"){
+        mot = t(mot)
+# rownames(mot)
+# [1] "A" "C" "G" "U"
+## Motifs are in units of RNA so to get cDNA must reverse complement
+# complement to DNA (A -> T, C -> G, G -> C, U -> A) then reverse columns
+        rownames(mot) = c("T","G","C", "A")
+        mot = mot[order(rownames(mot)), ncol(mot):1 ]
+        #print(ncol(mot))
+        
+        for (j in 1:nrow(df)){
+        #len = df$transcript_length[j]
+        seq = df$cdna[j]
+        counts = countPWM(mot, seq, min.score = "80%") 
+        mat_mot[j,i] = counts
+        }
+    }    
+}
+
+df = cbind(df, mat_mot)
+return(df)
+}
+df = RNABP_Motif_add(df)
+```
+
+
+```{r partition_frames}
+rownames(df) = df$target_id
+df = df[ ,-c(1,3)]
+saveRDS(df, "./Data/df_full.rds")
+set.seed(54321)
+
+spec = c(train = .6, test = .2, validate = .2)
+
+g = sample(cut(
+  seq(nrow(df)), 
+  nrow(df)*cumsum(c(0,spec)),
+  labels = names(spec)
+))
+
+res = split(df, g)
+
+#verify splits equal whole == TRUE
+sum(sapply(res, nrow)) == nrow(df)
+#Check splits dont contain duplicates == FALSE
+table(duplicated(c(rownames(res$train), rownames(res$test), rownames(res$validate))))
+
+# Save dataframes
+saveRDS(res, "./Data/Training_frames.rds")
+
+```
+
