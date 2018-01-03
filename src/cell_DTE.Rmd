@@ -11,6 +11,7 @@ Here we identify transcripts differentially localized in the cytosolic versus nu
 ```{r setup, include=FALSE}
 library(knitr)
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
 opts_knit$set(root.dir = "..")
 ```
 
@@ -137,7 +138,7 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
     res = res[!is.na(res$qval), ]
-    res = res[res$qval <= 0.05, ]
+    #res = res[res$qval <= 0.05, ]
     write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
     res$cell = i
     
@@ -168,7 +169,7 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
     res = res[!is.na(res$qval), ]
-    res = res[res$qval <= 0.05, ]
+    #res = res[res$qval <= 0.05, ]
     write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
     res$cell = i
 
@@ -176,14 +177,16 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
   }
 
 }
-## filter master qvals based on number of cell types tested
-master = master[master$qval <= (0.05/length(unique(s2c$cell))), ]
+
 
 write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
+rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter, set,set1,so,spikes, output, s2c_tmp, filespath, i, out_name, wts,x)
 ```
 
 .
-```{r}
+```{r, lncRNA_preprocess}
+## filter master qvals based on number of cell types tested
+#master = master[master$qval <= (0.05/length(unique(s2c$cell))), ]
 
 master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
 
@@ -225,7 +228,7 @@ pheatmap(mat2, cluster_rows = FALSE, cluster_cols = FALSE, labels_row = "" )
 dev.off()
 rm(mat2)
 
-table(rowMeans(mat, na.rm = TRUE) < 0)
+table(rowMeans(mat, na.rm = TRUE) < -1)
 
 wts = table(s2c$cell)/nrow(s2c)
 wts = wts[order(names(wts)) ]
@@ -235,6 +238,7 @@ mat = mat[ , order(colnames(mat))]
 
 df = data.frame(target_id = rownames(mat))
 df$l2fc = NA
+
 for (i in 1:nrow(mat)){
   
   df$l2fc[i] = weighted.mean(mat[i,], wts, na.rm = TRUE)
@@ -251,15 +255,16 @@ df$cdna = seq$cdna[match(df$target_id, seq$ensembl_transcript_id)]
 
 df$transcript_length = as.numeric(lapply(df$cdna, nchar))
 
-df$transcript_length = as.numeric(lapply(df$cdna, nchar))
 for (i in 1:nrow(df)){
 df$GC_content[i] =  sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1))
 }
+df = df[df$transcript_length > 200, ]
+
 saveRDS(df, "./Data/DE_lncRNAs.rds")
 ```
 
 
-```{r}
+```{r, feature_extraction}
 Kmer_add = function(df, k){
   library(Biostrings)
   #df must contain "cdna" column
@@ -327,22 +332,28 @@ df = cbind(df, mat_mot)
 return(df)
 }
 df = RNABP_Motif_add(df)
-saveRDS(df, "./Data/cdna_lncRNAs")
+saveRDS(df, "./Data/cdna_lncRNAs.rds")
 ```
 
 
 ```{r partition_frames}
 rownames(df) = df$target_id
-df = df[ ,-c(1,3)]
+df = df %>% dplyr::select( -c(cdna, target_id))
+
+remove_vars = which( lapply(df[ ,4:ncol(df)], var) < 1)
+
+df = df %>% dplyr::select( -one_of(names(remove_vars)) )
 
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","percentage_gene_gc_content", "transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
+map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
 mapmatch = match(rownames(df), map$ensembl_transcript_id)
 df = cbind(df, map[mapmatch, -1 ])
 
 df$transcript_biotype = as.factor(df$transcript_biotype)
+df$chromosome_name = as.factor(df$chromosome_name)
 
-saveRDS(df, "./Data/df_full.rds")
+
+saveRDS(df, "./Data/df_features.rds")
 set.seed(54321)
 
 spec = c(train = .6, test = .2, validate = .2)
@@ -360,7 +371,7 @@ sum(sapply(res, nrow)) == nrow(df)
 #Check splits dont contain duplicates == FALSE
 table(duplicated(c(rownames(res$train), rownames(res$test), rownames(res$validate))))
 
-# Save dataframes
+# Save final dataframes
 saveRDS(res, "./Data/Training_frames.rds")
 
 ```
