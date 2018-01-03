@@ -21,7 +21,6 @@ Code
     #setup dirs
     mkdir ENCODE
     mkdir ENCODE/Raw ENCODE/Meta
-    mkdir Raw Meta
     cd ENCODE/Meta
 
     ## following download link was created on 11/27/17 as described above
