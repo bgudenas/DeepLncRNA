@@ -37,13 +37,12 @@ samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" 
 samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
 samples$Lib_method = paste0(samples$Library.made.from,"_", samples$Library.depleted.in)
 
-## Remove any samples with missing ERCC spikeins
-samples = samples[!grepl("spikeins", samples$Audit.WARNING), ]
-
+# ## Remove any samples with missing ERCC spikeins
+# samples = samples[!grepl("spikeins", samples$Audit.WARNING), ]
 
 s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
 
-## Remove any samples with less than 4 total samples
+## Remove any cell types with less than 4 total samples
 s2c = s2c[is.na(match(s2c$cell, names(table(s2c$cell))[table(s2c$cell) < 4] ) ),   ]
 
 filespath = file.path(getwd(), "/Data/Kallisto/Quant", s2c$sample)
@@ -85,52 +84,56 @@ otherwise we do the standard DE test. For each cell type we plot the PCA of the 
 
 
 ```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
+
 master =c()
 for ( i in unique(s2c$cell)){
   s2c_tmp = dplyr::filter(s2c, cell == i) %>% arrange(sample)
-  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5))
   
+  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5) )
+  lds = plot_pc_variance(so)
+
+plot_pca(so, color_by = "condition",  text_labels = TRUE) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
   
   ## if more than 1  RNA-seq library protocols were used
   ## we normalize these cases by ERCC spikeins
 if (length(unique(s2c_tmp$Lib))  > 1 ) {
-    Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
-    Emat = tidyr::spread(Expr, key  = sample, est_counts)
-    rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
-    Emat = as.matrix(Emat[,-1])
+    # Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
+    # Emat = tidyr::spread(Expr, key  = sample, est_counts)
+    # rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
+    # Emat = as.matrix(Emat[,-1])
+    # 
+    # dim(Emat)
+    # 
+    # ## need to round est_counts to integer for RUVseq
+    # Emat = round(Emat)
+    # 
+    # # Filter transcripts 
+    # filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts in 2 samples)
+    # filtered <- Emat[filter,]
     
-    dim(Emat)
-  
-    ## need to round est_counts to integer for RUVseq
-    Emat = round(Emat)
     
-    # Filter transcripts 
-    filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts in 2 samples)
-    filtered <- Emat[filter,]
+    # spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
+    # # Number of spikeins
+    # length(spikes)
+    # x <- as.factor(s2c_tmp$condition)
+    # 
+    # #set <- newSeqExpressionSet(as.matrix(filtered),
+    #                          phenoData = data.frame(x, row.names=colnames(filtered)))
+    # # 
+    # s2c_tmp = s2c_tmp %>%  arrange(s2c_tmp$sample)
+    # 
+    # ## USE RUVg to normalize samples based on control spikeins
+    # # set1 <- RUVg(set, spikes, k=1)
+    # # wts = pData(set1)[,2:ncol(pData(set1))]
+    # # 
+    #  EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
+    # #EDASeq::plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i) )
     
-    
-    spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
-    # Number of spikeins
-    length(spikes)
-    x <- as.factor(s2c_tmp$condition)
-  
-    set <- newSeqExpressionSet(as.matrix(filtered),
-                             phenoData = data.frame(x, row.names=colnames(filtered)))
-    
-    s2c_tmp = s2c_tmp %>%  arrange(s2c_tmp$sample)
-  
-    ## USE RUVg to normalize samples based on control spikeins
-    set1 <- RUVg(set, spikes, k=1)
-    wts = pData(set1)[,2:ncol(pData(set1))]
-    
-    EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
-    EDASeq::plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i) )
-    
-    so$sample_to_covariates$W1 = wts
+    #so$sample_to_covariates$W1 = wts
     
     ## Use W1 as batch
-    so <- sleuth_fit(so, ~ W1 + condition, 'full')
-    so <- sleuth_fit(so, ~ W1, 'reduced')
+    so <- sleuth_fit(so, ~ Lib + condition, 'full')
+    so <- sleuth_fit(so, ~ Lib, 'reduced')
     #so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
     wt_results = sleuth_results(so, 'conditionnucleus')
@@ -160,7 +163,7 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
     filtered <- Emat[filter,]   
     EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
     
-    so <- sleuth_fit(so, ~ condition, 'full')
+    so <- sleuth_fit(so, ~  condition, 'full')
     so <- sleuth_fit(so, ~ 1, 'reduced')
     so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
@@ -198,8 +201,10 @@ annots$transcript_id = lapply(strsplit(annots$transcript_id, "\\."), "[[", 1)
 
 lnc_match = match(master$target_id, annots$transcript_id)
 
-
 lncRNAs = master[!is.na(lnc_match), ]
+#lncRNAs$qval = p.adjust(lncRNAs$pval, method = "fdr")
+#lncRNAs = lncRNAs[lncRNAs$qval <= 0.05, ]
+#lncRNAs = lncRNAs[lncRNAs]
 library(dplyr)
 
 ## set up Expression matrix lncRNAs x cell_type
@@ -218,8 +223,8 @@ for (i in 1:nrow(lncRNAs)){
   
 ## truncate extremes to avoid saturation in heatmap
 mat2 = mat
-mat2[mat2 < -4] = -4
-mat2[mat2 > 6] = 6
+mat2[mat2 < -3] = -3
+mat2[mat2 > 5] = 5
 
 
 library(pheatmap)
@@ -315,8 +320,9 @@ for (i in 1:mot_num){
 # [1] "A" "C" "G" "U"
 ## Motifs are in units of RNA so to get cDNA must reverse complement
 # complement to DNA (A -> T, C -> G, G -> C, U -> A) then reverse column order
-        rownames(mot) = c("T","G","C", "A")
-        mot = mot[order(rownames(mot)), ncol(mot):1 ]
+        #rownames(mot) = c("T","G","C", "A")
+        #mot = mot[order(rownames(mot)), ncol(mot):1 ]
+        rownames(mot)[4] = "T"
         #print(ncol(mot))
         
         for (j in 1:nrow(df)){
@@ -340,9 +346,9 @@ saveRDS(df, "./Data/cdna_lncRNAs.rds")
 rownames(df) = df$target_id
 df = df %>% dplyr::select( -c(cdna, target_id))
 
-remove_vars = which( lapply(df[ ,4:ncol(df)], var) < 1)
+drop_vars = colnames(df[ ,4:ncol(df)])[colSums(df[ ,4:ncol(df)])==0]
+df = df %>% dplyr::select( -one_of(drop_vars))
 
-df = df %>% dplyr::select( -one_of(names(remove_vars)) )
 
 mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
@@ -351,7 +357,12 @@ df = cbind(df, map[mapmatch, -1 ])
 
 df$transcript_biotype = as.factor(df$transcript_biotype)
 df$chromosome_name = as.factor(df$chromosome_name)
+df$lincRNA = FALSE
+df$lincRNA[df$transcript_biotype == "lincRNA"] = TRUE
 
+df$antisense = FALSE
+df$antisense[df$transcript_biotype == "antisense_RNA"] = TRUE
+df = df %>% dplyr::select( -transcript_biotype)
 
 saveRDS(df, "./Data/df_features.rds")
 set.seed(54321)
@@ -365,6 +376,7 @@ g = sample(cut(
 ))
 
 res = split(df, g)
+
 
 #verify splits equal whole == TRUE
 sum(sapply(res, nrow)) == nrow(df)
