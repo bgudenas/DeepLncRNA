@@ -21,6 +21,8 @@ library(stringr)
 library(sleuth)
 library(dplyr)
 library(RUVSeq)
+library(RColorBrewer)
+library(pheatmap)
 ```
 
 
@@ -97,41 +99,7 @@ plot_pca(so, color_by = "condition",  text_labels = TRUE) + xlab(paste("PC1","%V
   ## if more than 1  RNA-seq library protocols were used
   ## we normalize these cases by ERCC spikeins
 if (length(unique(s2c_tmp$Lib))  > 1 ) {
-    # Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
-    # Emat = tidyr::spread(Expr, key  = sample, est_counts)
-    # rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
-    # Emat = as.matrix(Emat[,-1])
-    # 
-    # dim(Emat)
-    # 
-    # ## need to round est_counts to integer for RUVseq
-    # Emat = round(Emat)
-    # 
-    # # Filter transcripts 
-    # filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts in 2 samples)
-    # filtered <- Emat[filter,]
     
-    
-    # spikes <- rownames(filtered)[grep("^ERCC", rownames(filtered))]
-    # # Number of spikeins
-    # length(spikes)
-    # x <- as.factor(s2c_tmp$condition)
-    # 
-    # #set <- newSeqExpressionSet(as.matrix(filtered),
-    #                          phenoData = data.frame(x, row.names=colnames(filtered)))
-    # # 
-    # s2c_tmp = s2c_tmp %>%  arrange(s2c_tmp$sample)
-    # 
-    # ## USE RUVg to normalize samples based on control spikeins
-    # # set1 <- RUVg(set, spikes, k=1)
-    # # wts = pData(set1)[,2:ncol(pData(set1))]
-    # # 
-    #  EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
-    # #EDASeq::plotPCA(set1, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main= paste("RUVg",i) )
-    
-    #so$sample_to_covariates$W1 = wts
-    
-    ## Use W1 as batch
     so <- sleuth_fit(so, ~ Lib + condition, 'full')
     so <- sleuth_fit(so, ~ Lib, 'reduced')
     #so <- sleuth_lrt(so, 'reduced', 'full')
@@ -193,7 +161,6 @@ rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter
 
 master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
 
-
 annots = rtracklayer::readGFF("./Data/Annotation/gencodev27lncRNAs.gtf", version = 2L)
 annots = dplyr::filter(annots, type == "transcript")
 # remove trailing decimal
@@ -205,7 +172,6 @@ lncRNAs = master[!is.na(lnc_match), ]
 #lncRNAs$qval = p.adjust(lncRNAs$pval, method = "fdr")
 #lncRNAs = lncRNAs[lncRNAs$qval <= 0.05, ]
 #lncRNAs = lncRNAs[lncRNAs]
-library(dplyr)
 
 ## set up Expression matrix lncRNAs x cell_type
 mat = matrix(nrow = length(unique(lncRNAs$target_id)), ncol = length(unique(lncRNAs$cell)), data = NA)
@@ -220,18 +186,39 @@ for (i in 1:nrow(lncRNAs)){
   
   mat[rownames(mat) == target, colnames(mat) == celltype] = l2fc
 }
-  
-## truncate extremes to avoid saturation in heatmap
-mat2 = mat
-mat2[mat2 < -3] = -3
-mat2[mat2 > 5] = 5
 
 
-library(pheatmap)
-pdf("./Figures/lncRNA_heatmap.pdf")
-pheatmap(mat2, cluster_rows = FALSE, cluster_cols = FALSE, labels_row = "" )
+div_cols = unlist(list(color = brewer.pal(11, "RdYlBu")))[11:1]
+
+mat_breaks = c(min(mat, na.rm = TRUE), -3, -1,  0,  1, 3, 6 ,max(mat, na.rm = TRUE))
+div_cols = div_cols[c(1,2,3,7,9,10,11)]
+
+
+
+
+pdf("./Figures/lncRNA_heatmap.pdf", onefile = TRUE)
+pheatmap(mat, cluster_rows = FALSE, cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-4, -2,0, 2, 4,6, max(mat, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,6, "L2FC\n") ) 
+p
 dev.off()
 rm(mat2)
+
+cyfracs = c()
+for ( i in which(df$l2fc < 0)){
+  if (sum(!is.na(mat[i, ])) > 1){
+  cyfracs = c(cyfracs, sum(mat[i, ] <= 0, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
+  }
+}
+
+
+nucfracs = c()
+for ( i in which(df$l2fc >  1)){
+  if (sum(!is.na(mat[i, ])) > 1){
+  nucfracs = c(nucfracs, sum(mat[i, ] > 1, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
+  }
+}
+
+boxplot(nucfracs, cyfracs, col = c("#A50026", "#313695"), outline = FALSE, ylab = "Percent  Conserved", xlab = "LncRNAs", names = c("Nuclear","Cytosol"))
+
 
 table(rowMeans(mat, na.rm = TRUE) < -1)
 
