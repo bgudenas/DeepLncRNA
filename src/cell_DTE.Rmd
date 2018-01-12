@@ -169,9 +169,8 @@ annots$transcript_id = lapply(strsplit(annots$transcript_id, "\\."), "[[", 1)
 lnc_match = match(master$target_id, annots$transcript_id)
 
 lncRNAs = master[!is.na(lnc_match), ]
-#lncRNAs$qval = p.adjust(lncRNAs$pval, method = "fdr")
-#lncRNAs = lncRNAs[lncRNAs$qval <= 0.05, ]
-#lncRNAs = lncRNAs[lncRNAs]
+# lncRNAs$qval = p.adjust(lncRNAs$pval, method = "fdr")
+# lncRNAs = lncRNAs[lncRNAs$qval <= 0.1, ]
 
 ## set up Expression matrix lncRNAs x cell_type
 mat = matrix(nrow = length(unique(lncRNAs$target_id)), ncol = length(unique(lncRNAs$cell)), data = NA)
@@ -202,23 +201,6 @@ p
 dev.off()
 rm(mat2)
 
-cyfracs = c()
-for ( i in which(df$l2fc < 0)){
-  if (sum(!is.na(mat[i, ])) > 1){
-  cyfracs = c(cyfracs, sum(mat[i, ] <= 0, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
-  }
-}
-
-
-nucfracs = c()
-for ( i in which(df$l2fc >  1)){
-  if (sum(!is.na(mat[i, ])) > 1){
-  nucfracs = c(nucfracs, sum(mat[i, ] > 1, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
-  }
-}
-
-boxplot(nucfracs, cyfracs, col = c("#A50026", "#313695"), outline = FALSE, ylab = "Percent  Conserved", xlab = "LncRNAs", names = c("Nuclear","Cytosol"))
-
 
 table(rowMeans(mat, na.rm = TRUE) < -1)
 
@@ -236,7 +218,22 @@ for (i in 1:nrow(mat)){
   df$l2fc[i] = weighted.mean(mat[i,], wts, na.rm = TRUE)
 }
 
+cyfracs = c()
+for ( i in which(df$l2fc < -1)){
+  if (sum(!is.na(mat[i, ])) > 1){
+  cyfracs = c(cyfracs, sum(mat[i, ] <= -1, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
+  }
+}
 
+
+nucfracs = c()
+for ( i in which(df$l2fc >  3)){
+  if (sum(!is.na(mat[i, ])) > 1){
+  nucfracs = c(nucfracs, sum(mat[i, ] > 3, na.rm = TRUE)/sum(!is.na(mat[i, ] )) *100)
+  }
+}
+
+boxplot(nucfracs, cyfracs, col = c("#A50026", "#313695"), outline = FALSE, ylab = "Percent  Conserved", xlab = "LncRNAs", names = c("Nuclear","Cytosol"))
 
 ## get lncRNA cDNA sequences
 library(biomaRt)
@@ -250,7 +247,7 @@ df$transcript_length = as.numeric(lapply(df$cdna, nchar))
 for (i in 1:nrow(df)){
 df$GC_content[i] =  sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1))
 }
-df = df[df$transcript_length > 200, ]
+
 
 saveRDS(df, "./Data/DE_lncRNAs.rds")
 ```
@@ -343,13 +340,6 @@ mapmatch = match(rownames(df), map$ensembl_transcript_id)
 df = cbind(df, map[mapmatch, -1 ])
 
 df$transcript_biotype = as.factor(df$transcript_biotype)
-df$chromosome_name = as.factor(df$chromosome_name)
-df$lincRNA = FALSE
-df$lincRNA[df$transcript_biotype == "lincRNA"] = TRUE
-
-df$antisense = FALSE
-df$antisense[df$transcript_biotype == "antisense_RNA"] = TRUE
-df = df %>% dplyr::select( -transcript_biotype)
 
 saveRDS(df, "./Data/df_features.rds")
 set.seed(54321)
