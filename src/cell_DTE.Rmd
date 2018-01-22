@@ -105,11 +105,9 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
     #so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
     wt_results = sleuth_results(so, 'conditionnucleus')
-    res =wt_results[!is.na(wt_results$qval), ]
+    res =wt_results[!is.na(wt_results$pval), ]
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
-    res = res[!is.na(res$qval), ]
-    #res = res[res$qval <= 0.05, ]
     write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
     res$cell = i
     
@@ -136,11 +134,9 @@ if (length(unique(s2c_tmp$Lib))  > 1 ) {
     so <- sleuth_lrt(so, 'reduced', 'full')
     so = sleuth_wt(so, "conditionnucleus")
     wt_results = sleuth_results(so, 'conditionnucleus')
-    res =wt_results[!is.na(wt_results$qval), ]
+    res =wt_results[!is.na(wt_results$pval), ]
     res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
     out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
-    res = res[!is.na(res$qval), ]
-    #res = res[res$qval <= 0.05, ]
     write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
     res$cell = i
 
@@ -154,10 +150,8 @@ write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
 rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter, set,set1,so,spikes, output, s2c_tmp, filespath, i, out_name, wts,x)
 ```
 
-.
+
 ```{r, lncRNA_preprocess}
-## filter master qvals based on number of cell types tested
-#master = master[master$qval <= (0.05/length(unique(s2c$cell))), ]
 
 master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
 
@@ -169,8 +163,6 @@ annots$transcript_id = lapply(strsplit(annots$transcript_id, "\\."), "[[", 1)
 lnc_match = match(master$target_id, annots$transcript_id)
 
 lncRNAs = master[!is.na(lnc_match), ]
-# lncRNAs$qval = p.adjust(lncRNAs$pval, method = "fdr")
-# lncRNAs = lncRNAs[lncRNAs$qval <= 0.1, ]
 
 ## set up Expression matrix lncRNAs x cell_type
 mat = matrix(nrow = length(unique(lncRNAs$target_id)), ncol = length(unique(lncRNAs$cell)), data = NA)
@@ -334,8 +326,8 @@ drop_vars = colnames(df[ ,4:ncol(df)])[colSums(df[ ,4:ncol(df)])==0]
 df = df %>% dplyr::select( -one_of(drop_vars))
 
 
-mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-map = getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
+mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map = biomaRt::getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
 mapmatch = match(rownames(df), map$ensembl_transcript_id)
 df = cbind(df, map[mapmatch, -1 ])
 
