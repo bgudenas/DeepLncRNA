@@ -181,20 +181,22 @@ for (i in 1:nrow(lncRNAs)){
 
 div_cols = unlist(list(color = brewer.pal(11, "RdYlBu")))[11:1]
 
-mat_breaks = c(min(mat, na.rm = TRUE), -3, -1,  0,  1, 3, 6 ,max(mat, na.rm = TRUE))
+mat2 = mat
+mat2[mat2 >= 8] = 8
+mat2[mat2 <= -5] = -5
+mat_breaks = c(min(mat2, na.rm = TRUE), -3, -1,  0,  1, 3, 6 ,max(mat2, na.rm = TRUE))
 div_cols = div_cols[c(1,2,3,7,9,10,11)]
 
 
 
 
-pdf("./Figures/lncRNA_heatmap.pdf", onefile = TRUE)
-pheatmap(mat, cluster_rows = FALSE, cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-4, -2,0, 2, 4,6, max(mat, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,6, "L2FC\n") ) 
+#pdf("./Figures/lncRNA_heatmap.pdf", onefile = TRUE)
+pheatmap(mat2, cluster_rows = FALSE, cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-3, -1,0, 1, 3,6, max(mat2, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,6, "L2FC\n"), cex = 1.2 ) 
 
-dev.off()
-rm(mat2)
+#dev.off()
 
 
-table(rowMeans(mat, na.rm = TRUE) < -1)
+#table(rowMeans(mat, na.rm = TRUE) < 0)
 
 wts = table(s2c$cell)/nrow(s2c)
 wts = wts[order(names(wts)) ]
@@ -229,7 +231,7 @@ boxplot(nucfracs, cyfracs, col = c("#A50026", "#313695"), outline = FALSE, ylab 
 
 ## get lncRNA cDNA sequences
 library(biomaRt)
-mart = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
 seq = biomaRt::getSequence(id = df$target_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 df$cdna = seq$cdna[match(df$target_id, seq$ensembl_transcript_id)]
@@ -325,19 +327,30 @@ df = df %>% dplyr::select( -c(cdna, target_id))
 drop_vars = colnames(df[ ,4:ncol(df)])[colSums(df[ ,4:ncol(df)])==0]
 df = df %>% dplyr::select( -one_of(drop_vars))
 
-
-mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mart = biomaRt::useMart(biomart="ensembl", dataset="hsapiens_gene_ensembl")
 map = biomaRt::getBM(mart = mart, attributes = c("ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = rownames(df))
 mapmatch = match(rownames(df), map$ensembl_transcript_id)
 df = cbind(df, map[mapmatch, -1 ])
 
 df$chromosome_name = as.factor(df$chromosome_name)
 df$transcript_biotype = as.factor(df$transcript_biotype)
+df$lincRNA = FALSE
+df$lincRNA[df$transcript_biotype == "lincRNA"] = TRUE
+
+df$antisense = FALSE
+df$antisense[df$transcript_biotype == "antisense_RNA"] = TRUE
+
+df$sense = FALSE
+df$sense[grepl("^sense_", df$transcript_biotype)] = TRUE
+
+df = df %>% dplyr::select(-transcript_biotype)
+
 
 saveRDS(df, "./Data/df_features.rds")
+
 set.seed(54321)
 
-spec = c(train = .6, test = .2, validate = .2)
+spec = c(train = .7, test = .15, validate = .15)
 
 g = sample(cut(
   seq(nrow(df)), 
