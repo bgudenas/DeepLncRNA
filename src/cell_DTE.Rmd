@@ -236,7 +236,7 @@ mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 seq = biomaRt::getSequence(id = df$target_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
 df$cdna = seq$cdna[match(df$target_id, seq$ensembl_transcript_id)]
 
-df$transcript_length = as.numeric(lapply(df$cdna, nchar))
+seq$transcript_length = as.numeric(lapply(seq$cdna, nchar))
 
 for (i in 1:nrow(df)){
 df$GC_content[i] =  sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(df$cdna[i]), 1))
@@ -332,20 +332,25 @@ map = biomaRt::getBM(mart = mart, attributes = c("ensembl_transcript_id","transc
 mapmatch = match(rownames(df), map$ensembl_transcript_id)
 df = cbind(df, map[mapmatch, -1 ])
 
-df$chromosome_name = as.factor(df$chromosome_name)
-df$transcript_biotype = as.factor(df$transcript_biotype)
-df$lincRNA = FALSE
-df$lincRNA[df$transcript_biotype == "lincRNA"] = TRUE
+df$lincRNA = 0
+df$lincRNA[df$transcript_biotype == "lincRNA"] = 1
 
-df$antisense = FALSE
-df$antisense[df$transcript_biotype == "antisense_RNA"] = TRUE
+df$antisense = 0
+df$antisense[df$transcript_biotype == "antisense_RNA"] = 1
 
-df$sense = FALSE
-df$sense[grepl("^sense_", df$transcript_biotype)] = TRUE
+df$sense = 0
+df$sense[grepl("^sense_", df$transcript_biotype)] = 1
 
 df = df %>% dplyr::select(-transcript_biotype)
 
+chroms =  as.data.frame(model.matrix(~df$chromosome_name))
+chroms$`(Intercept)` = 0
+chroms$`(Intercept)`[df$chromosome_name == 1] = 1
+colnames(chroms)[1] = "df$chromosome_name1"
+colnames(chroms) = unlist(lapply(strsplit(colnames(chroms), "\\$"), "[[", 2))
 
+df = cbind(df, chroms)
+df = df %>% dplyr::select( - chromosome_name)
 saveRDS(df, "./Data/df_features.rds")
 
 set.seed(54321)
