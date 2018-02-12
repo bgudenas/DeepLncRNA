@@ -91,7 +91,7 @@ master =c()
 for ( i in unique(s2c$cell)){
   s2c_tmp = dplyr::filter(s2c, cell == i) %>% arrange(sample)
   
-  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5) )
+  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5), extra_bootstrap_summary = TRUE)
   lds = plot_pc_variance(so)
 
 plot_pca(so, color_by = "condition",  text_labels = TRUE) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
@@ -375,4 +375,24 @@ table(duplicated(c(rownames(res$train), rownames(res$test), rownames(res$validat
 saveRDS(res, "./Data/Training_frames.rds")
 
 ```
+
+```{r, lncRNA_heatmap}
+df = df[df$l2fc > 2.8 | df$l2fc < 0, ]
+
+mat_match = match(rownames(mat), rownames(df))
+mat = mat[!is.na(mat_match), ]
+
+div_cols = unlist(list(color = brewer.pal(11, "RdYlBu")))[11:1]
+mat2 = mat
+mat2[mat2 >= 7] = 7
+mat2[mat2 <= -5] = -5
+mat_breaks = c(min(mat2, na.rm = TRUE), -3, -1,  0,  1, 3, 5 ,max(mat2, na.rm = TRUE))
+div_cols = div_cols[c(1,2,3,7,8,10,11)]
+
+mat2 = mat2[order(rowMeans(mat2, na.rm = TRUE), decreasing = TRUE), ]
+
+pheatmap(mat2, cluster_rows = FALSE , cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-3, -1,0, 1, 3,5, max(mat2, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,5, "L2FC\n"), cex = 1.2 ) 
+
+```
+
 
