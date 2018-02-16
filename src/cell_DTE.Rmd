@@ -367,6 +367,11 @@ df = cbind(df, chroms)
 df = df %>% dplyr::select( - chromosome_name)
 saveRDS(df, "./Data/df_features.rds")
 
+df = df[df$l2fc < 0 | df$l2fc > 2.8, ]
+df$Loc = "Nuclear"
+df$Loc[df$l2fc < 0] = "Cytosol"
+df$Loc = as.factor(df$Loc)
+
 set.seed(54321)
 
 spec = c(train = .7, test = .15, validate = .15)
@@ -379,9 +384,7 @@ g = sample(cut(
 
 res = split(df, g)
 
-
-#verify splits equal whole == TRUE
-sum(sapply(res, nrow)) == nrow(df)
+lapply(res, dim)
 #Check splits dont contain duplicates == FALSE
 table(duplicated(c(rownames(res$train), rownames(res$test), rownames(res$validate))))
 
