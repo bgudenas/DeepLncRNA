@@ -70,18 +70,11 @@ RNABP_Motif_add = function(df){
     
     for (i in 1:mot_num){
         fils = list.files(motifs_dir)[i]
-        #some motif files from CISBP are completely empty and will throw an error so i added a try-catch here
+        #some motif files from CISBP are empty (RFAM) and will throw an error 
         mot = try(read.table(paste0(motifs_dir, "/", fils), sep = "\t", row.names = 1, header = TRUE ), silent = TRUE)
         if (class(mot) != "try-error"){
             mot = t(mot)
-            # rownames(mot)
-            # [1] "A" "C" "G" "U"
-            ## Motifs are in units of RNA so to get cDNA must reverse complement
-            # complement to DNA (A -> T, C -> G, G -> C, U -> A) then reverse column order
-            #rownames(mot) = c("T","G","C", "A")
-            #mot = mot[order(rownames(mot)), ncol(mot):1 ]
             rownames(mot)[4] = "T"
-            #print(ncol(mot))
             
             for (j in 1:nrow(df)){
                 #len = df$transcript_length[j]
