@@ -25,7 +25,8 @@ library(RColorBrewer)
 library(pheatmap)
 ```
 
-##Load Metadata
+## Load Metadata
+
 ```{r metadata, message = FALSE, warning = FALSE}
 ## load Sample Metadata 
 samples = read_tsv("./Data/Meta/metadata.tsv")
@@ -149,7 +150,8 @@ write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
 rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter, set,set1,so,spikes, output, s2c_tmp, filespath, i, out_name, wts,x)
 ```
 
-##LncRNA Filter
+## LncRNA Filter
+
 ```{r, lncRNA_preprocess}
 
 master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
@@ -216,6 +218,7 @@ for (i in 1:nrow(mat)){
 ```
 
 ## Feature Extraction
+
 ```{r, feature_extraction}
 source("./src/DeepLocal.R")
 trans = GetSeq(df$target_id)
@@ -228,6 +231,7 @@ df = FeatureExtract(trans)
 ```
 
 ## Create training dataset
+
 ```{r partition_frames}
 rownames(df) = df$ensembl_transcript_id
 df = df %>% dplyr::select( -c(cdna, ensembl_transcript_id))
