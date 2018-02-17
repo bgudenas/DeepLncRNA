@@ -1,0 +1,499 @@
+---
+title: Prediction of LncRNA Subcellular Localization with Deep Learning from Sequence
+  Features
+author: "Brian Gudenas"
+date: "February 16, 2018"
+output: word_document
+---
+
+#1. Differential Transcript Expression 
+Here we identify transcripts differentially localized in the cytosolic versus nuclear subcellular fractions from fractionated immortalized cell line RNA-seq data from ENCODE.
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+opts_knit$set(root.dir = "..")
+```
+
+```{r Libraries, message = FALSE, warning = FALSE}
+library(readr)
+library(stringr)
+library(sleuth)
+library(dplyr)
+library(RUVSeq)
+library(RColorBrewer)
+library(pheatmap)
+```
+
+
+```{r metadata, message = FALSE, warning = FALSE}
+## load Sample Metadata 
+samples = read_tsv("./Data/Meta/metadata.tsv")
+colnames(samples) = make.names(colnames(samples))
+Pair = read.table("./Data/Meta/Pair_map.txt", sep="\t", header = TRUE)
+
+samples = samples[!is.na(match(samples$File.accession, Pair$Pair1)), ]
+
+samples = samples[samples$Biosample.subcellular.fraction.term.name == "nucleus" | samples$Biosample.subcellular.fraction.term.name == "cytosol", ]
+
+samples$Library.depleted.in[is.na(samples$Library.depleted.in)] = "rRNA"
+samples$Lib_method = paste0(samples$Library.made.from,"_", samples$Library.depleted.in)
+
+# ## Remove any samples with missing ERCC spikeins
+# samples = samples[!grepl("spikeins", samples$Audit.WARNING), ]
+
+s2c = dplyr::select(samples, sample = File.accession, condition = Biosample.subcellular.fraction.term.name, cell = Biosample.term.name, platform = Platform, Lib = Lib_method, reads = Read.length, warning = Audit.WARNING)
+
+## Remove any cell types with less than 4 total samples
+s2c = s2c[is.na(match(s2c$cell, names(table(s2c$cell))[table(s2c$cell) < 4] ) ),   ]
+
+filespath = file.path(getwd(), "/Data/Kallisto/Quant", s2c$sample)
+s2c = dplyr::mutate(s2c, path = filespath)
+
+## Total samples
+nrow(s2c)
+## Samples per fraction
+table(s2c$condition)
+## Samples per Library type
+table(s2c$Lib)
+## Cell types
+table(s2c$cell)
+
+## Kallisto.o* is the standard output from the kallisto quant call for all samples
+output = read.delim(file = "./Data/Kallisto/Kallisto.o2139569", sep = "\n")
+pairmap = read.delim(file ="./Data/Meta/Pair_map.txt")
+
+alignments = output[grepl("processed", output[,1]), ]
+
+
+pairmap$total_reads = as.numeric(str_trim(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 1)), " reads"), "[[", 1)), "processed"),"[[",2)),",","")))
+pairmap$reads_aligned = as.numeric(str_replace_all(unlist(lapply(str_split(unlist(lapply(str_split(alignments, ", "), "[[", 2)), " reads"), "[[", 1)), ",",""))
+
+pairmap$percent_aligned = pairmap$reads_aligned/pairmap$total_reads*100
+s2c$total_reads = pairmap$total_reads[match(s2c$sample, pairmap$Pair1)]
+s2c$reads_aligned = pairmap$reads_aligned[match(s2c$sample, pairmap$Pair1)]
+
+## total aligned reads
+sum(s2c$reads_aligned)
+
+#rm(alignments, samples, pairmap, Pair, output)
+write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
+```
+
+## DTE by cell type
+Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we normalize these samples based on ERCC control spike ins,
+otherwise we do the standard DE test. For each cell type we plot the PCA of the sleuth normalized counts and if available, the RUVg spike in normalized counts. Lastly, we use the bonferroni correction to adjust the alpha level for the number of cell types tested, resulting in a q-value threshold  of `r 0.05/length(unique(s2c$cell))`
+
+
+```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
+
+master =c()
+for ( i in unique(s2c$cell)){
+  s2c_tmp = dplyr::filter(s2c, cell == i) %>% arrange(sample)
+  
+  so = sleuth_prep(s2c_tmp, transformation_function = function(x) log2(x+0.5), extra_bootstrap_summary = TRUE)
+  lds = plot_pc_variance(so)
+
+plot_pca(so, color_by = "condition",  text_labels = TRUE) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
+  
+  ## if more than 1  RNA-seq library protocols were used
+  ## we normalize these cases by ERCC spikeins
+if (length(unique(s2c_tmp$Lib))  > 1 ) {
+    
+    so <- sleuth_fit(so, ~ Lib + condition, 'full')
+    so <- sleuth_fit(so, ~ Lib, 'reduced')
+    #so <- sleuth_lrt(so, 'reduced', 'full')
+    so = sleuth_wt(so, "conditionnucleus")
+    wt_results = sleuth_results(so, 'conditionnucleus')
+    res =wt_results[!is.na(wt_results$pval), ]
+    res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+    out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
+    write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+    res$cell = i
+    
+    master = rbind(master,res)
+  
+    
+  } else {
+    
+     Expr = so$obs_norm %>%  dplyr::select(target_id, sample, est_counts)
+    Emat = tidyr::spread(Expr, key  = sample, est_counts)
+    rownames(Emat) = unlist(lapply(str_split(Emat[,1],"\\|"), "[[",1))
+    Emat = as.matrix(Emat[,-1])
+    #dim(Emat)
+    ## need to round est_counts to integer for RUVseq
+    Emat = round(Emat)
+    
+    # Filter transcripts 
+    filter <- apply(Emat, 1, function(x) length(x[x > 5]) >= 2) ##remove non-expressed transcripts (5 counts     in 2 samples)
+    filtered <- Emat[filter,]   
+    EDASeq::plotPCA(filtered, col=as.numeric(as.factor(s2c_tmp$condition))+2, cex=1.2, k=3, pch = as.numeric(as.factor(s2c_tmp$Lib)), main = paste("Sleuth",i) )
+    
+    so <- sleuth_fit(so, ~  condition, 'full')
+    so <- sleuth_fit(so, ~ 1, 'reduced')
+    so <- sleuth_lrt(so, 'reduced', 'full')
+    so = sleuth_wt(so, "conditionnucleus")
+    wt_results = sleuth_results(so, 'conditionnucleus')
+    res =wt_results[!is.na(wt_results$pval), ]
+    res$target_id = unlist(lapply(str_split(res$target_id, "\\."), "[[", 1))
+    out_name = paste0("./Data/tables/DTE","_",i, ".tsv")
+    write.table(res, out_name, sep = "\t", quote = FALSE, row.names = FALSE)
+    res$cell = i
+
+    master = rbind(master,res)
+  }
+
+}
+
+
+write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
+rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter, set,set1,so,spikes, output, s2c_tmp, filespath, i, out_name, wts,x)
+```
+
+
+```{r, lncRNA_preprocess}
+
+master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
+
+annots = rtracklayer::readGFF("./Data/Annotation/gencodev27lncRNAs.gtf", version = 2L)
+annots = dplyr::filter(annots, type == "transcript")
+# remove trailing decimal
+annots$transcript_id = lapply(strsplit(annots$transcript_id, "\\."), "[[", 1)
+
+lnc_match = match(master$target_id, annots$transcript_id)
+
+lncRNAs = master[!is.na(lnc_match), ]
+
+## set up Expression matrix lncRNAs x cell_type
+mat = matrix(nrow = length(unique(lncRNAs$target_id)), ncol = length(unique(lncRNAs$cell)), data = NA)
+colnames(mat) = unique(lncRNAs$cell)
+rownames(mat) = unique(lncRNAs$target_id)
+
+## Loop through and add fold-changes, leave NA if not detected
+for (i in 1:nrow(lncRNAs)){
+  l2fc = lncRNAs$b[i]
+  target = lncRNAs$target_id[i]
+  celltype = lncRNAs$cell[i]
+  
+  mat[rownames(mat) == target, colnames(mat) == celltype] = l2fc
+}
+
+
+div_cols = unlist(list(color = brewer.pal(11, "RdYlBu")))[11:1]
+
+mat2 = mat
+mat2[mat2 >= 8] = 8
+mat2[mat2 <= -5] = -5
+mat_breaks = c(min(mat2, na.rm = TRUE), -3, -1,  0,  1, 3, 6 ,max(mat2, na.rm = TRUE))
+div_cols = div_cols[c(1,2,3,7,9,10,11)]
+
+
+
+
+#pdf("./Figures/lncRNA_heatmap.pdf", onefile = TRUE)
+pheatmap(mat2, cluster_rows = FALSE, cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-3, -1,0, 1, 3,6, max(mat2, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,6, "L2FC\n"), cex = 1.2 ) 
+
+rm(mat2)
+#dev.off()
+
+
+#table(rowMeans(mat, na.rm = TRUE) < 0)
+
+wts = table(s2c$cell)/nrow(s2c)
+wts = wts[order(names(wts)) ]
+
+mat = mat[ , order(colnames(mat))]
+
+
+df = data.frame(target_id = rownames(mat))
+df$l2fc = NA
+
+for (i in 1:nrow(mat)){
+  
+  df$l2fc[i] = weighted.mean(mat[i,], wts, na.rm = TRUE)
+}
+
+
+```
+
+
+```{r, feature_extraction}
+source("./src/DeepLocal.R")
+trans = GetSeq(df$target_id)
+trans = cbind(df$l2fc[match(trans$ensembl_transcript_id, df$target_id)], trans)
+colnames(trans)[1] = "l2fc"
+df = FeatureExtract(trans)
+
+
+
+```
+
+
+```{r partition_frames}
+rownames(df) = df$ensembl_transcript_id
+df = df %>% dplyr::select( -c(cdna, ensembl_transcript_id))
+
+drop_vars = colnames(df[ ,4:ncol(df)])[colSums(df[ ,4:ncol(df)])==0]
+df = df %>% dplyr::select( -one_of(drop_vars))
+saveRDS(df, "./Data/feature_set.rds")
+
+df = df[df$l2fc < 0 | df$l2fc > 2.8, ]
+df$Loc = "Nuclear"
+df$Loc[df$l2fc < 0] = "Cytosol"
+df$Loc = as.factor(df$Loc)
+
+set.seed(54321)
+
+spec = c(train = .7, test = .15, validate = .15)
+
+g = sample(cut(
+  seq(nrow(df)), 
+  nrow(df)*cumsum(c(0,spec)),
+  labels = names(spec)
+))
+
+res = split(df, g)
+
+lapply(res, dim)
+#Check splits dont contain duplicates == FALSE
+table(duplicated(c(rownames(res$train), rownames(res$test), rownames(res$validate))))
+
+# Save final dataframes
+saveRDS(res, "./Data/Training_frames.rds")
+
+```
+
+### Machine learning
+
+
+```{r, DNN}
+library(h2o)
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 24, max_mem_size = "84G")
+train_hex = as.h2o(res$train[ ,-1])
+valid_hex = as.h2o(res$validate[ ,-1])
+test_hex = as.h2o(res$validate[ ,-1])
+
+hyper_params <- list(
+  activation=c("RectifierWithDropout"),
+  hidden =list( c(250,125,75), c(100,50,25 ), c(64, 32, 16), c(64,64,64) ),
+                input_dropout_ratio=c(0, 0.1,0.2, 0.3, 0.4),
+                l1 = c(1e-6,1e-5,1e-4, 1e-3, 0),
+                l2 = c(1e-6,1e-5,1e-4, 1e-3, 0)
+  )
+  
+  
+  search_criteria = list(strategy = "RandomDiscrete", max_models = 800, seed=54321, stopping_rounds=10, stopping_tolerance=1e-3)
+  
+  dl_random_grid <- h2o.grid(
+    algorithm="deeplearning",
+    grid_id = "dl_grid",
+    training_frame=train_hex,
+    validation_frame = valid_hex,
+    x=1:1583,
+    y=1584,
+    epochs= 400,
+    stopping_metric="misclassification",
+    stopping_tolerance=1e-3,        
+    stopping_rounds=10,
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+  )
+  
+  grid <- h2o.getGrid("dl_grid",sort_by="max_per_class_error", decreasing=FALSE)
+  
+  best_model <- h2o.getModel(grid@model_ids[[1]])
+ 
+  h2o.saveModel(best_model, path="./Model/", force=TRUE)
+  h2o.shutdown(FALSE)
+  
+```
+
+```{r, model_comparison}
+library(randomForest)
+library(doParallel)
+library(caret)
+library(pROC)
+
+cluster <- makeCluster(detectCores()) 
+registerDoParallel(cluster)
+
+svm_radial <- caret::train(Loc ~.,
+                           data = res$train,
+                           method = "svmRadial",
+                           preProcess = c("center", "scale"),
+                           trControl = trainControl(classProbs = TRUE),
+                           allowParralel = TRUE,
+                           tuneLength = 5)
+
+rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
+                           allowParralel = TRUE,
+                           tuneLength = 5,
+                           ntree = 101)
+
+
+
+stopCluster(cluster)
+registerDoSEQ()
+
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
+#DNN = h2o.loadModel("./Data/dl_grid_model_190")
+DNN = h2o.loadModel("./Data/Models/dlgrid_model_483")
+train_hex = as.h2o(res$train)
+valid_hex = as.h2o(res$validate)
+test_hex = as.h2o(res$test)
+
+
+## Make plot of validation accuracies
+rf_vals = predict(rf, res$validate)
+rf_conf = confusionMatrix(rf_vals, res$validate$Loc, positive = "Nuclear")
+
+svm_vals = predict(svm_radial, res$validate)
+svm_conf = confusionMatrix(svm_vals, res$validate$Loc, positive = "Nuclear")
+
+DNN_vals = predict(DNN, valid_hex)
+DNN_conf = confusionMatrix(as.vector(DNN_vals$predict), res$validate$Loc, positive = "Nuclear")
+
+
+GetMets = function(confMat){
+  ## get acc, sens, spec from caret confusion matrix
+  acc = confMat$overall[1]
+  spec =  confMat$table[1,1]/(confMat$table[1,1] + confMat$table[2,1])
+  sens = confMat$table[2,2]/(confMat$table[2,2] + confMat$table[1,2])
+  mets = c(acc,sens,spec)
+  names(mets) = c("Accuracy","Sensitivity","Specificity")
+  return(mets)
+}
+
+valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLocal = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
+  tidyr::gather(valid_mets, Metrics)
+colnames(valid_mets) = c("Metric","Model","Value")
+
+ggplot(data = valid_mets, aes(as.factor(Model), Value, fill = Metric) ) +
+  geom_bar( stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim=c(0.65,0.8)) +
+  xlab("Model") +
+  theme_bw() + 
+  theme(axis.text=element_text(size=13),
+  axis.title=element_text(size=14,face="bold"), legend.title = element_text(size=12,face="bold"))
+ggsave("./Figures/Model_Comparison.pdf")
+
+```
+
+```{r, ROC}
+
+dnn_test = predict(DNN, test_hex)
+rf_test = predict(rf, res$test, "prob")
+svm_test = predict(svm_radial, res$test, "prob")
+pdf("./Figures/AUROC.pdf")
+
+
+dnn_roc = pROC::roc(predictor=as.vector(dnn_test$Nuclear),
+                    response=res$test$Loc,
+                    levels=levels(res$test$Loc) )
+
+plot(dnn_roc, col = "blue", cex.lab = 1.3, cex.axis = 1, lwd=3)
+
+rf_roc =pROC::roc(predictor=as.vector(rf_test$Nuclear),
+                  response=res$test$Loc,
+                  levels=levels(res$test$Loc) )
+
+plot(rf_roc, add = TRUE, col = "darkorange",lty=2, lwd = 3)
+
+svm_roc = pROC::roc(predictor=as.vector(svm_test$Nuclear),
+                     response=res$test$Loc,
+                     levels=levels(res$test$Loc) )
+plot(svm_roc, add = TRUE, col = "magenta",lty =3, lwd = 3)
+
+
+legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
+       col=c("blue", "darkorange","magenta","grey"), lty = c(1, 2,3,1), lwd = c(3,3,3,2), cex = 1.2)
+```
+
+```{r, testset_metrics}
+
+rf_test = predict(rf, res$test)
+rf_conf = confusionMatrix(rf_test, res$test$Loc, positive = "Nuclear")
+
+svm_test = predict(svm_radial, res$test)
+svm_conf = confusionMatrix(svm_test, res$test$Loc, positive = "Nuclear")
+
+DNN_test = predict(DNN, test_hex)
+DNN_conf = confusionMatrix(as.vector(DNN_test$predict), res$test$Loc, positive = "Nuclear")
+
+test_mets = data.frame(t(data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(DNN_conf)) ))
+test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc)
+
+rf_mcc = mltools::mcc(preds = as.numeric(rf_test)-1, actuals = as.numeric(res$test$Loc)-1)
+svm_mcc = mltools::mcc(preds = as.numeric(svm_test)-1, actuals = as.numeric(res$test$Loc)-1)
+dnn_mcc = mltools::mcc(preds = as.numeric(as.factor(as.vector(DNN_test$predict)))-1, actuals = as.numeric(res$test$Loc)-1)
+
+test_mets$MCC = c(rf_mcc, svm_mcc, dnn_mcc)
+write.csv(round(test_mets, 3), "./Data/test_metrics.csv")
+
+```
+
+
+
+
+```{r, lncRNA_heatmap}
+
+
+mat_match = match(rownames(mat), rownames(df))
+mat = mat[!is.na(mat_match), ]
+
+div_cols = unlist(list(color = brewer.pal(11, "RdYlBu")))[11:1]
+mat2 = mat
+mat2[mat2 >= 7] = 7
+mat2[mat2 <= -5] = -5
+mat_breaks = c(min(mat2, na.rm = TRUE), -3, -1,  0,  1, 3, 5 ,max(mat2, na.rm = TRUE))
+div_cols = div_cols[c(1,2,3,7,8,10,11)]
+
+mat2 = mat2[order(rowMeans(mat2, na.rm = TRUE), decreasing = TRUE), ]
+
+pheatmap(mat2, cluster_rows = FALSE , cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-3, -1,0, 1, 3,5, max(mat2, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,5, "L2FC\n"), cex = 1.2 ) 
+
+```
+
+
+
+
+```{r, genomic_analysis}
+Gtrans = GetSeq(annots$transcript_id)
+Gdf = FeatureExtract(Gtrans)
+preds = DeepLocal(Gdf)    
+Gdf = cbind(preds, Gdf)
+Gdf$transcript_biotype = Gtrans$transcript_biotype
+
+# 
+pos = Gdf %>%
+  group_by(transcript_biotype) %>%
+  summarise(avg = (sum(predict == "Nuclear")/n())*100, count = n()) %>%
+  filter(count > 20) %>%
+  arrange(desc(avg)) %>%
+  dplyr::select(transcript_biotype)
+pos = as.character(pos$transcript_biotype)
+
+Gdf %>% 
+  group_by(transcript_biotype) %>% 
+  summarise(avg = (sum(predict == "Nuclear")/n())*100, count = n()) %>% 
+  filter(count > 20) %>% 
+  arrange(desc(avg)) %>% 
+  ggplot( aes(x = as.factor(transcript_biotype), avg, fill = as.factor(transcript_biotype))) +
+  geom_bar(stat="identity", position = "dodge") +
+  xlab("LncRNA  biotype") +
+  ylab("% Nuclear") +
+  coord_flip() +
+  geom_hline(yintercept = 50, col = "red", lwd = 1) +
+  scale_x_discrete(limits = pos) +
+  guides(fill=FALSE) +
+  theme_bw(base_size = 14)
+ggsave("./Figures/genomic_biotype_loc.pdf")
+
+
+```
+
+
+
+
