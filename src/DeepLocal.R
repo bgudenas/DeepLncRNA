@@ -11,10 +11,9 @@ Gene2Transcript = function(Ensembl_gene_IDs){
     return(map)
 }
 
-#Usage
-trans = Gene2Transcript(c("ENSG00000229807", "ENSG00000228630"))
 
-Preprocess = function(Ensembl_transcript_IDs){
+
+GetSeq = function(Ensembl_transcript_IDs){
     ## Uses transcript_Ids to extract, biotype, chromosome, cDNA sequence, transcript_length, GC %
     library(Biostrings)
     mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
@@ -30,7 +29,6 @@ Preprocess = function(Ensembl_transcript_IDs){
     return(map)
 }
 
-lncRNAs = Preprocess(trans$ensembl_transcript_id)
 
 Kmer_add = function(df, k){
     library(Biostrings)
@@ -60,6 +58,7 @@ Kmer_add = function(df, k){
     return(df)
 }
 
+
 RNABP_Motif_add = function(df){
     library(Biostrings)
     
@@ -88,6 +87,7 @@ RNABP_Motif_add = function(df){
     df = cbind(df, mat_mot)
     return(df)
 }
+
 
 FeatureExtract = function(map){
     library(dplyr)
@@ -120,5 +120,23 @@ FeatureExtract = function(map){
     
     return(df)
 }
-    
-    
+
+
+DeepLocal = function(df){
+  library(h2o)
+  localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "1G")
+  DNN = h2o.loadModel("./Data/Models/dlgrid_model_483")
+  pred_hex = as.h2o(df)
+  vals = as.data.frame(predict(DNN, pred_hex, "probs"))
+  rownames(vals) = df$ensembl_transcript_id
+  h2o.shutdown(FALSE)
+  return(vals)
+}
+
+##Usage example
+# #Usage
+# trans = Gene2Transcript(c("ENSG00000229807", "ENSG00000228630"))
+# lncRNAs = GetSeq(trans$ensembl_transcript_id)
+# df = FeatureExtract(lncRNAs)
+# preds = DeepLocal(df)    
+
