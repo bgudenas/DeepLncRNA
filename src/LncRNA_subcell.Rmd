@@ -6,8 +6,7 @@ date: "February 16, 2018"
 output: word_document
 ---
 
-#1. Differential Transcript Expression 
-Here we identify transcripts differentially localized in the cytosolic versus nuclear subcellular fractions from fractionated immortalized cell line RNA-seq data from ENCODE.
+
 
 ```{r setup, include=FALSE}
 library(knitr)
@@ -26,7 +25,7 @@ library(RColorBrewer)
 library(pheatmap)
 ```
 
-
+##Load Metadata
 ```{r metadata, message = FALSE, warning = FALSE}
 ## load Sample Metadata 
 samples = read_tsv("./Data/Meta/metadata.tsv")
@@ -82,8 +81,7 @@ write.csv(s2c, "./Data/Meta/Sample_Meta.csv")
 ```
 
 ## DTE by cell type
-Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we normalize these samples based on ERCC control spike ins,
-otherwise we do the standard DE test. For each cell type we plot the PCA of the sleuth normalized counts and if available, the RUVg spike in normalized counts. Lastly, we use the bonferroni correction to adjust the alpha level for the number of cell types tested, resulting in a q-value threshold  of `r 0.05/length(unique(s2c$cell))`
+Perform differential transcript expression analysis for each cell type. If a cell type contains more than a single RNA library construction protocol then we utilize library type as a covariate in the DTE test.
 
 
 ```{r DTE_loop, cache = TRUE, warning = FALSE, message= FALSE}
@@ -151,7 +149,7 @@ write.csv(master, "./Data/tables/Master.csv", quote = FALSE, row.names = FALSE)
 rm(Emat,Expr,filtered,Pair,pairmap, res, samples, wt_results, alignments, filter, set,set1,so,spikes, output, s2c_tmp, filespath, i, out_name, wts,x)
 ```
 
-
+##LncRNA Filter
 ```{r, lncRNA_preprocess}
 
 master = read.csv("./Data/tables/Master.csv", header = TRUE, stringsAsFactors = FALSE)
@@ -217,7 +215,7 @@ for (i in 1:nrow(mat)){
 
 ```
 
-
+## Feature Extraction
 ```{r, feature_extraction}
 source("./src/DeepLocal.R")
 trans = GetSeq(df$target_id)
@@ -229,7 +227,7 @@ df = FeatureExtract(trans)
 
 ```
 
-
+## Create training dataset
 ```{r partition_frames}
 rownames(df) = df$ensembl_transcript_id
 df = df %>% dplyr::select( -c(cdna, ensembl_transcript_id))
@@ -264,8 +262,7 @@ saveRDS(res, "./Data/Training_frames.rds")
 
 ```
 
-### Machine learning
-
+## Deep Learning
 
 ```{r, DNN}
 library(h2o)
@@ -308,6 +305,8 @@ hyper_params <- list(
   h2o.shutdown(FALSE)
   
 ```
+
+## Machine learning model comparison on validation set
 
 ```{r, model_comparison}
 library(randomForest)
@@ -381,6 +380,8 @@ ggsave("./Figures/Model_Comparison.pdf")
 
 ```
 
+## Model evalutation on test set
+
 ```{r, ROC}
 
 dnn_test = predict(DNN, test_hex)
@@ -411,6 +412,8 @@ legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
        col=c("blue", "darkorange","magenta","grey"), lty = c(1, 2,3,1), lwd = c(3,3,3,2), cex = 1.2)
 ```
 
+## Test set performance metrics
+
 ```{r, testset_metrics}
 
 rf_test = predict(rf, res$test)
@@ -434,8 +437,7 @@ write.csv(round(test_mets, 3), "./Data/test_metrics.csv")
 
 ```
 
-
-
+## Differentially localized lncRNA heatmap
 
 ```{r, lncRNA_heatmap}
 
@@ -457,7 +459,7 @@ pheatmap(mat2, cluster_rows = FALSE , cluster_cols = TRUE, labels_row = "", brea
 ```
 
 
-
+## Genomic predictions
 
 ```{r, genomic_analysis}
 Gtrans = GetSeq(annots$transcript_id)
