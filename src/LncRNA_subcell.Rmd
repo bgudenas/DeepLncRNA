@@ -268,7 +268,7 @@ saveRDS(res, "./Data/Training_frames.rds")
 
 ## Deep Learning
 
-```{r, DNN}
+```{r, DNN, eval = FALSE}
 library(h2o)
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 24, max_mem_size = "84G")
 train_hex = as.h2o(res$train[ ,-1])
@@ -310,9 +310,9 @@ hyper_params <- list(
   
 ```
 
-## Machine learning model comparison on validation set
 
-```{r, model_comparison}
+
+```{r, model_building, eval = FALSE}
 library(randomForest)
 library(doParallel)
 library(caret)
@@ -338,6 +338,16 @@ rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
 
 stopCluster(cluster)
 registerDoSEQ()
+
+ save.image("./Data/ML_models.RData")
+```
+
+ ## Machine learning model comparison on validation set
+ 
+ 
+```{r, model_comparison}
+load(file = "./Data/ML_models.RData")
+
 
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
 #DNN = h2o.loadModel("./Data/dl_grid_model_190")
@@ -368,7 +378,7 @@ GetMets = function(confMat){
   return(mets)
 }
 
-valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLocal = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
+valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
   tidyr::gather(valid_mets, Metrics)
 colnames(valid_mets) = c("Metric","Model","Value")
 
@@ -391,7 +401,7 @@ ggsave("./Figures/Model_Comparison.pdf")
 dnn_test = predict(DNN, test_hex)
 rf_test = predict(rf, res$test, "prob")
 svm_test = predict(svm_radial, res$test, "prob")
-pdf("./Figures/AUROC.pdf")
+#pdf("./Figures/AUROC.pdf")
 
 
 dnn_roc = pROC::roc(predictor=as.vector(dnn_test$Nuclear),
@@ -467,6 +477,7 @@ pheatmap(mat2, cluster_rows = FALSE , cluster_cols = TRUE, labels_row = "", brea
 
 ```{r, genomic_analysis}
 Gtrans = GetSeq(annots$transcript_id)
+Gtrans = Gtrans[is.na(match(Gtrans$ensembl_transcript_id, rownames(res$train))), ]
 Gdf = FeatureExtract(Gtrans)
 preds = DeepLocal(Gdf)    
 Gdf = cbind(preds, Gdf)
@@ -499,6 +510,75 @@ ggsave("./Figures/genomic_biotype_loc.pdf")
 
 
 ```
+
+```{r, known_locs}
+# annots ------------------------------------------------------------------
+known = read.csv("./Data/annotated_lncRNAs.csv")
+source("./src/DeepLocal.R")
+trans = Gene2Transcript(known$ID)
+
+
+transM = Gene2Transcript(known$ID[known$Species == "Mouse"], martID = "mmusculus_gene_ensembl")
+seqM = GetSeq(transM$ensembl_transcript_id, martID = "mmusculus_gene_ensembl")
+
+Borg = seqM
+Borg$ensembl_transcript_id = "BORG"
+Borg$cdna = stringr::str_replace_all(known$seq[8], "\n","")
+Borg$transcript_length = nchar(as.character(Borg$cdna))
+Borg$GC_content = sum(oligonucleotideFrequency(DNAString(Borg$cdna), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(Borg$cdna), 1))
+
+seqs = GetSeq(trans$ensembl_transcript_id)
+
+fullseq = rbind(Borg,seqM,seqs)
+fullseq$chromosome_name[1:2] = 0 ## set to zero bc not on human chroms (mouse lncRNAs)
+fullseq = fullseq %>% filter(transcript_biotype != "protein_coding") %>% 
+  filter(transcript_biotype != "nonsense_mediated_decay") %>% 
+  filter(transcript_length >= 200)
+
+
+df = FeatureExtract(fullseq)
+preds = DeepLocal(df)
+
+trans = rbind(transM, trans, c("BORG","BORG","lincRNA"))
+
+preds$gene = trans$ensembl_gene_id[match(rownames(preds), trans$ensembl_transcript_id)]
+preds$name = known$Name[match(preds$gene, known$ID)]
+preds$Loc = known$Localized[match(preds$gene, known$ID)]
+
+library(dplyr)
+
+meds = preds %>% 
+  group_by(gene) %>% 
+  #summarise(Nuclear = median(Nuclear) )
+  summarise(Nuclear = sum(predict == "Nuclear")/n()) 
+meds$Loc = known$Localized[match(meds$gene, known$ID)]
+meds = meds[order(meds$Loc), ]
+meds$Cytosol = 1-meds$Nuclear
+nams=  known$Name[match( meds$gene, known$ID)]
+nams = nams[!is.na(nams)]
+meds$Name = nams
+
+medL = melt(meds[,c(2,4,5)], id.vars = "Name")
+
+colvec = rep("red", nrow(meds))
+colvec[meds$Loc == "Cytosol"] = "blue"
+colvec[meds$Loc == "Dual"] = "black"
+
+ggplot(medL, aes(x = Name, value, fill = as.factor(variable))) +
+  geom_bar(stat="identity") +
+  xlab("") +
+  ylab("Percent Localized") +
+  coord_flip() +
+  scale_x_discrete(limits = meds$Name) +
+  scale_fill_discrete(name = "Fraction") +
+  theme_bw() +
+  theme(axis.text.y=element_text(colour = colvec, size = 12))
+ggsave("./Figures/annotated_lncRNAs.pdf", width = 5, height = 7, units = "in")
+
+
+
+```
+
 
 
 
