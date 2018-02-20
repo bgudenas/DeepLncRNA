@@ -77,7 +77,7 @@ GetMets = function(confMat){
   return(mets)
 }
 
-valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLocal = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
+valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
   tidyr::gather(valid_mets, Metrics)
 colnames(valid_mets) = c("Metric","Model","Value")
 
@@ -121,7 +121,7 @@ svm_roc = pROC::roc(predictor=as.vector(svm_test$Nuclear),
 plot(svm_roc, add = TRUE, col = "magenta",lty =3, lwd = 3)
 
 
-legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
+legend(0.35, 0.25, legend=c("DeepLncRNA", "RF", "SVM","Random Guess"),
        col=c("blue", "darkorange","magenta","grey"), lty = c(1, 2,3,1), lwd = c(3,3,3,2), cex = 1.2)
 dev.off()
 
