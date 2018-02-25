@@ -3,19 +3,19 @@
 # 2/15/18
 
 
-Gene2Transcript = function(Ensembl_gene_IDs , martID = "hsapiens_gene_ensembl"){
+Gene2Transcript = function(Ensembl_gene_IDs , mart ){
     # Extract all transcripts for a list of ensembl gene IDs
-    mart = biomaRt::useMart("ensembl", dataset = martID)
+  #mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
     map = biomaRt::getBM(mart = mart, attributes = c("ensembl_gene_id", "ensembl_transcript_id","transcript_biotype"), filters = "ensembl_gene_id", values = Ensembl_gene_IDs)
     return(map)
 }
 
 
 
-GetSeq = function(Ensembl_transcript_IDs, martID ="hsapiens_gene_ensembl"){
+GetSeq = function(Ensembl_transcript_IDs, mart){
     ## Uses transcript_Ids to extract, biotype, chromosome, cDNA sequence, transcript_length, GC %
     library(Biostrings)
-    mart = biomaRt::useMart("ensembl", dataset = martID)
+    #mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
     map = biomaRt::getBM(mart = mart, attributes = c( "ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = Ensembl_transcript_IDs)
     seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
     map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
