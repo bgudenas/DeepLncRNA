@@ -1,0 +1,38 @@
+---
+title: "README"
+author: "Brian Gudenas"
+date: "February 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## DeepLncRNA
+
+DeepLncRNA is a deep learning model which predicts nuclear or cytosolic localization of lncRNAs. After cloning this repo and downloading the dependencies it can be utilized starting from either ensembl gene or transcript IDs or with a custom sequence.
+
+## Dependencies
+```{r , eval = FALSE}
+install.packages(c("dplyr","h2o"))
+source("https://bioconductor.org/biocLite.R")
+biocLite(c("Biostrings","biomaRt"))
+```
+
+
+```{r , message = FALSE, warning=FALSE}
+source("./src/DeepLncRNA.R")
+IDs = c("ENSG00000224294", "ENSG00000278709" ) 
+
+mart = biomaRt::useMart("ensembl","hsapiens_gene_ensembl")
+trans = Gene2Transcript(IDs, mart)
+seqs = GetSeq(trans$ensembl_transcript_id, mart)
+df = FeatureExtract(seqs)
+preds = DeepLncRNA(df)
+
+preds$gene = trans$ensembl_gene_id[match(rownames(preds), trans$ensembl_transcript_id)]
+preds
+
+```
+
