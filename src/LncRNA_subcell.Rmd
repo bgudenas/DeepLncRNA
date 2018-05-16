@@ -178,6 +178,22 @@ for (i in 1:nrow(mat)){
   
   df$l2fc[i] = weighted.mean(mat[i,], wts, na.rm = TRUE)
 }
+quantile(df$l2fc)
+## Select top quantile as positive set and bottom quantile as negative set
+## Round to nice numbers (Cytosolic = < 0, Nuclear >= 2.8)
+
+# Make Histogram of L2FC dist
+h = hist(df$l2fc ) 
+## change lower break from 0 to -1 to fit border of breakline for visualization
+cuts <- cut(h$breaks, c(-Inf,-1,2.8,Inf))
+#pdf("./Figures/lncRNA_hist.pdf")
+plot(h, col = c("blue","white","red")[cuts], xlim = range(-7, 7), xlab = expression("Log"[2]* " Fold-Change"), main = "", cex.lab = 1.2)
+abline(v = median(df$l2fc), col = "grey", lwd = 2)
+# abline(v = 2.8, col = "blue", lwd = 2)
+#table(df$l2fc < 0)
+text("4380 Cytosolic", x = -2, y = 2200, col = "blue", cex = 1.3)
+text("4298 Nuclear", x = 5.8, y = 2200, col = "red", cex = 1.3)
+
 ```
 
 ## Feature Extraction
