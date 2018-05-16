@@ -99,7 +99,7 @@ FeatureExtract = function(map){
     df$lincRNA[df$transcript_biotype == "lincRNA"] = 1
     
     df$antisense = 0
-    df$antisense[df$transcript_biotype == "antisense_RNA"] = 1
+    df$antisense[df$transcript_biotype == "antisense"] = 1
     
     df$sense = 0
     df$sense[grepl("^sense_", df$transcript_biotype)] = 1
