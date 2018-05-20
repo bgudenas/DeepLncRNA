@@ -346,14 +346,14 @@ rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
 stopCluster(cluster)
 registerDoSEQ()
 
- save.image("./Data/ML_models.RData")
+ saveRDS(svm_radial, "./Data/SVM.rds")
+saveRDS(rf, "./Data/RF.rds")
 ```
 
  ## Machine learning model comparison on validation set
  
  
 ```{r, model_comparison, fig.height= 7, fig.width= 5}
-load(file = "./Data/ML_models.RData")
 library(h2o)
 library(caret)
 
@@ -438,6 +438,7 @@ plot(svm_roc, add = TRUE, col = "magenta",lty =3, lwd = 3)
 
 legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
        col=c("blue", "darkorange","magenta","grey"), lty = c(1, 2,3,1), lwd = c(3,3,3,2), cex = 1.2)
+h2o.shutdown(FALSE)
 ```
 
 ## Test set performance metrics
