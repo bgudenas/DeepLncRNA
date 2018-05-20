@@ -280,10 +280,43 @@ search_criteria = list(strategy = "RandomDiscrete", max_models = 800, seed=54321
 grid <- h2o.getGrid("dl_grid",sort_by="max_per_class_error", decreasing=FALSE)
   
 best_model <- h2o.getModel(grid@model_ids[[1]])
+best_model@model_id = "DeepLncRNA"
  
-h2o.saveModel(best_model, path="./Model/", force=TRUE)
+h2o.saveModel(best_model, path="./Data/Models/", force=TRUE)
 h2o.shutdown(FALSE)
   
+```
+
+ Use paramaters found in grid search to create new deep learning on same data but using only sequence features (no genomic features) to evaluate feature importance.
+ 
+```{r, Feature_evaluation, eval = FALSE}
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 3, max_mem_size = "7G")
+kmers = c(1, 1557:1583) ## all features not kmers
+
+train_K = as.h2o(res$train[ ,-kmers])
+valid_K = as.h2o(res$validate[ ,-kmers])
+test_K = as.h2o(res$validate[ ,-kmers])
+
+
+h2o.no_progress()
+
+DNNK = h2o.deeplearning(
+    training_frame=train_K,
+    validation_frame = valid_K,
+    x=1:1555,
+    y=1556,
+    epochs= 2000,
+    stopping_metric="misclassification",
+    stopping_tolerance=1e-3,        
+    stopping_rounds=10,
+    activation = "RectifierWithDropout",
+    hidden = c(64,32,16),
+    input_dropout_ratio = 0.3,
+    l1 = 1e-3,
+    l2 = 1e-5)
+DNNK@model_id = "Kmer_model"
+h2o.saveModel(DNNK, "./Data/Models/")
+
 ```
 
 
@@ -327,7 +360,8 @@ library(caret)
 
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
 #DNN = h2o.loadModel("./Data/dl_grid_model_190")
-DNN = h2o.loadModel("./Data/Models/dlgrid_model_483")
+DNN = h2o.loadModel("./Data/Models/DeepLncRNA")
+DNNK = h2o.loadModel("./Data/Models/Kmer_model")
 train_hex = as.h2o(res$train)
 valid_hex = as.h2o(res$validate)
 test_hex = as.h2o(res$test)
@@ -342,6 +376,7 @@ svm_conf = confusionMatrix(svm_vals, res$validate$Loc, positive = "Nuclear")
 
 DNN_vals = predict(DNN, valid_hex)
 DNN_conf = confusionMatrix(as.vector(DNN_vals$predict), res$validate$Loc, positive = "Nuclear")
+
 
 
 GetMets = function(confMat){
@@ -376,9 +411,14 @@ ggsave("./Figures/Model_Comparison.pdf")
 dnn_test = predict(DNN, test_hex)
 rf_test = predict(rf, res$test, "prob")
 svm_test = predict(svm_radial, res$test, "prob")
+dnnk_vals = predict(DNNK, test_hex)
 
 
 dnn_roc = pROC::roc(predictor=as.vector(dnn_test$Nuclear),
+                    response=res$test$Loc,
+                    levels=levels(res$test$Loc) )
+
+dnnk_roc = pROC::roc(predictor=as.vector(dnnk_test$Nuclear),
                     response=res$test$Loc,
                     levels=levels(res$test$Loc) )
 
@@ -403,17 +443,14 @@ legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
 ## Test set performance metrics
 
 ```{r, testset_metrics}
-rf_test = predict(rf, res$test)
+
 rf_conf = confusionMatrix(rf_test, res$test$Loc, positive = "Nuclear")
-
-svm_test = predict(svm_radial, res$test)
 svm_conf = confusionMatrix(svm_test, res$test$Loc, positive = "Nuclear")
+dnn_conf = confusionMatrix(as.vector(dnn_test$predict), res$test$Loc, positive = "Nuclear")
+dnnk_conf = confusionMatrix(as.vector(dnnk_vals$predict), res$test$Loc, positive = "Nuclear")
 
-DNN_test = predict(DNN, test_hex)
-DNN_conf = confusionMatrix(as.vector(DNN_test$predict), res$test$Loc, positive = "Nuclear")
-
-test_mets = data.frame(t(data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(DNN_conf)) ))
-test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc)
+test_mets = data.frame(t(data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(Dnn_conf), DNNK = GetMets(dnnk_conf)) ))
+test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc, dnnk_roc$auc)
 
 rf_mcc = mltools::mcc(preds = as.numeric(rf_test)-1, actuals = as.numeric(res$test$Loc)-1)
 svm_mcc = mltools::mcc(preds = as.numeric(svm_test)-1, actuals = as.numeric(res$test$Loc)-1)
@@ -423,6 +460,11 @@ test_mets$MCC = c(rf_mcc, svm_mcc, dnn_mcc)
 write.csv(round(test_mets, 3), "./Data/test_metrics.csv")
 
 ```
+
+```{r, Feature_comparison}
+
+```
+
 
 ## Differentially localized lncRNA heatmap
 
