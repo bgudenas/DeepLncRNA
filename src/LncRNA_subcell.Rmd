@@ -287,10 +287,41 @@ h2o.shutdown(FALSE)
   
 ```
 
- Use paramaters found in grid search to create new deep learning on same data but using only sequence features (no genomic features) to evaluate feature importance.
+
+
+```{r, model_building}
+library(randomForest)
+library(doParallel)
+library(caret)
+library(pROC)
+
+cluster <- makeCluster(detectCores()) 
+registerDoParallel(cluster)
+
+svm_radial <- caret::train(Loc ~.,
+                           data = res$train,
+                           method = "svmRadial",
+                           preProcess = c("center", "scale"),
+                           trControl = trainControl(classProbs = TRUE),
+                           allowParralel = TRUE,
+                           tuneLength = 5)
+
+rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
+                           allowParralel = TRUE,
+                           tuneLength = 5,
+                           ntree = 101)
+
+stopCluster(cluster)
+registerDoSEQ()
+
+ saveRDS(svm_radial, "./Data/Models/SVM.rds")
+saveRDS(rf, "./Data/Models/RF.rds")
+```
+Use paramaters found in grid search to create new deep learning on same data but using only sequence features (no genomic features) to evaluate feature importance.
  
-```{r, Feature_evaluation, eval = FALSE}
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 3, max_mem_size = "7G")
+```{r, Feature_evaluation}
+library(h2o)
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 3, max_mem_size = "6G")
 kmers = c(1, 1557:1583) ## all features not kmers
 
 train_K = as.h2o(res$train[ ,-kmers])
@@ -316,50 +347,19 @@ DNNK = h2o.deeplearning(
     l2 = 1e-5)
 DNNK@model_id = "Kmer_model"
 h2o.saveModel(DNNK, "./Data/Models/")
+h2o.shutdown()
 
-```
-
-
-
-```{r, model_building, eval = FALSE}
-library(randomForest)
-library(doParallel)
-library(caret)
-library(pROC)
-
-cluster <- makeCluster(detectCores()) 
-registerDoParallel(cluster)
-
-svm_radial <- caret::train(Loc ~.,
-                           data = res$train,
-                           method = "svmRadial",
-                           preProcess = c("center", "scale"),
-                           trControl = trainControl(classProbs = TRUE),
-                           allowParralel = TRUE,
-                           tuneLength = 5)
-
-rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
-                           allowParralel = TRUE,
-                           tuneLength = 5,
-                           ntree = 101)
-
-stopCluster(cluster)
-registerDoSEQ()
-
- saveRDS(svm_radial, "./Data/SVM.rds")
-saveRDS(rf, "./Data/RF.rds")
 ```
 
  ## Machine learning model comparison on validation set
  
- 
 ```{r, model_comparison, fig.height= 7, fig.width= 5}
 library(h2o)
 library(caret)
-
+rf = readRDS("./Data/Models/RF.rds")
+SVM = readRDS("./Data/Models/SVM.rds")
 
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
-#DNN = h2o.loadModel("./Data/dl_grid_model_190")
 DNN = h2o.loadModel("./Data/Models/DeepLncRNA")
 DNNK = h2o.loadModel("./Data/Models/Kmer_model")
 train_hex = as.h2o(res$train)
@@ -404,6 +404,7 @@ ggplot(data = valid_mets, aes(as.factor(Model), Value, fill = Metric) ) +
 ggsave("./Figures/Model_Comparison.pdf")
 
 ```
+
 
 ## Model evalutation on test set
 
