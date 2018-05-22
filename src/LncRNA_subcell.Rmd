@@ -178,21 +178,6 @@ for (i in 1:nrow(mat)){
   
   df$l2fc[i] = weighted.mean(mat[i,], wts, na.rm = TRUE)
 }
-quantile(df$l2fc)
-## Select top quantile as positive set and bottom quantile as negative set
-## Round to nice numbers (Cytosolic = < 0, Nuclear >= 2.8)
-
-# Make Histogram of L2FC dist
-h = hist(df$l2fc ) 
-## change lower break from 0 to -1 to fit border of breakline for visualization
-cuts <- cut(h$breaks, c(-Inf,-1,2.8,Inf))
-#pdf("./Figures/lncRNA_hist.pdf")
-plot(h, col = c("blue","white","red")[cuts], xlim = range(-7, 7), xlab = expression("Log"[2]* " Fold-Change"), main = "", cex.lab = 1.2)
-abline(v = median(df$l2fc), col = "grey", lwd = 2)
-# abline(v = 2.8, col = "blue", lwd = 2)
-#table(df$l2fc < 0)
-text("4380 Cytosolic", x = -2, y = 2200, col = "blue", cex = 1.3)
-text("4298 Nuclear", x = 5.8, y = 2200, col = "red", cex = 1.3)
 
 ```
 
@@ -207,6 +192,26 @@ colnames(trans)[1] = "l2fc"
 df = FeatureExtract(trans)
 
 ```
+
+```{r, localization_histogram}
+quantile(df$l2fc)
+## Select top quantile as positive set and bottom quantile as negative set
+## Round to nice numbers (Cytosolic = < 0, Nuclear >= 2.8)
+# Make Histogram of L2FC dist
+h = hist(df$l2fc ) 
+cuts <- cut(h$breaks, c(-Inf,-1,2.8,Inf))
+
+plot(h, col = c("blue","white","red")[cuts], xlim = range(-7, 7), xlab = expression("Log"[2]* " Fold-Change"), main = "", cex.lab = 1.2)
+abline(v = median(df$l2fc), col = "grey", lwd = 2)
+
+cyto = sum(df$l2fc < 0)
+nuc = sum(df$l2fc > 2.8)
+
+text(paste(cyto, "Cytosolic"), x = -2, y = 2200, col = "blue", cex = 1.3)
+text(paste(nuc, "Nuclear"), x = 5.8, y = 2200, col = "red", cex = 1.3)
+
+```
+
 
 ## Create training dataset
 
@@ -247,7 +252,7 @@ saveRDS(res, "./Data/Training_frames.rds")
 
 ```{r, DNN, eval = FALSE}
 library(h2o)
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 24, max_mem_size = "84G")
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 12, max_mem_size = "16G")
 train_hex = as.h2o(res$train[ ,-1])
 valid_hex = as.h2o(res$validate[ ,-1])
 test_hex = as.h2o(res$validate[ ,-1])
@@ -299,16 +304,16 @@ cluster <- makeCluster(detectCores())
 registerDoParallel(cluster)
 
 svm_radial <- caret::train(Loc ~.,
-                           data = res$train,
+                           data = res$train[ ,-1],
                            method = "svmRadial",
                            preProcess = c("center", "scale"),
                            trControl = trainControl(classProbs = TRUE),
                            allowParralel = TRUE,
-                           tuneLength = 5)
+                           tuneLength = 3)
 
-rf <- caret::train(Loc ~ ., data = res$train, method = "rf",
+rf <- caret::train(Loc ~ ., data = res$train[ ,-1], method = "rf",
                            allowParralel = TRUE,
-                           tuneLength = 5,
+                           tuneLength = 3,
                            ntree = 101)
 
 stopCluster(cluster)
@@ -344,8 +349,8 @@ DNNK = h2o.deeplearning(
     hidden = c(64,32,16),
     input_dropout_ratio = 0.3,
     l1 = 1e-3,
-    l2 = 1e-5)
-DNNK@model_id = "Kmer_model"
+    l2 = 1e-5,
+    model_id = "Kmer_model")
 h2o.saveModel(DNNK, "./Data/Models/")
 h2o.shutdown()
 
@@ -371,11 +376,11 @@ test_hex = as.h2o(res$test)
 rf_vals = predict(rf, res$validate)
 rf_conf = confusionMatrix(rf_vals, res$validate$Loc, positive = "Nuclear")
 
-svm_vals = predict(svm_radial, res$validate)
+svm_vals = predict(SVM, res$validate)
 svm_conf = confusionMatrix(svm_vals, res$validate$Loc, positive = "Nuclear")
 
 DNN_vals = predict(DNN, valid_hex)
-DNN_conf = confusionMatrix(as.vector(DNN_vals$predict), res$validate$Loc, positive = "Nuclear")
+DNN_conf = confusionMatrix(as.factor(as.vector(DNN_vals$predict)), res$validate$Loc, positive = "Nuclear")
 
 
 
@@ -460,10 +465,6 @@ dnn_mcc = mltools::mcc(preds = as.numeric(as.factor(as.vector(DNN_test$predict))
 
 test_mets$MCC = c(rf_mcc, svm_mcc, dnn_mcc)
 write.csv(round(test_mets, 3), "./Data/test_metrics.csv")
-
-```
-
-```{r, Feature_comparison}
 
 ```
 
