@@ -216,7 +216,7 @@ text(paste(nuc, "Nuclear"), x = 5.8, y = 2200, col = "red", cex = 1.3)
 
 ## Create training dataset
 
-```{r partition_frames, eval = FALSE}
+```{r partition_frames}
 rownames(df) = df$ensembl_transcript_id
 df = df %>% dplyr::select( -c(cdna, ensembl_transcript_id))
 
@@ -232,7 +232,7 @@ dim(df)
 table(df$Loc)
 
 
-
+set.seed(54321)
 spec = c(train = .7, test = .15, validate = .15)
 
 g = sample(cut(
@@ -302,8 +302,9 @@ h2o.shutdown(FALSE)
 library(randomForest)
 library(doParallel)
 library(caret)
-library(pROC)
 
+
+res = readRDS("./Data/Training_frames.rds")
 cluster <- makeCluster(detectCores()) 
 registerDoParallel(cluster)
 
@@ -313,15 +314,15 @@ logit <- caret::train(Loc ~.,
                            preProcess = c("center", "scale"),
                            trControl = trainControl(classProbs = TRUE),
                            allowParralel = TRUE,
-                           tuneLength = 5)
+                           tuneLength = 6)
 
-naive <- caret::train(Loc ~.,
+gbm <- caret::train(Loc ~.,
                            data = res$train[ ,-1],
-                           method = "naive_bayes",
+                           method = "gbm",
                            preProcess = c("center", "scale"),
                            trControl = trainControl(classProbs = TRUE),
                            allowParralel = TRUE,
-                           tuneLength = 1)
+                           tuneLength = 6)
 
 svm_radial <- caret::train(Loc ~.,
                            data = res$train[ ,-1],
@@ -329,50 +330,25 @@ svm_radial <- caret::train(Loc ~.,
                            preProcess = c("center", "scale"),
                            trControl = trainControl(classProbs = TRUE),
                            allowParralel = TRUE,
-                           tuneLength = 5)
+                           tuneLength = 6)
 
 rf <- caret::train(Loc ~ ., data = res$train[ ,-1], method = "rf",
                            allowParralel = TRUE,
-                           tuneLength = 5,
+                           tuneLength = 6,
                            ntree = 101)
 
 stopCluster(cluster)
 registerDoSEQ()
 
+saveRDS(gbm, "./Data/Models/gbm.rds")
+saveRDS(logit, "./Data/Models/Logit.rds")
 saveRDS(svm_radial, "./Data/Models/SVM.rds")
 saveRDS(rf, "./Data/Models/RF.rds")
 ```
 Use paramaters found in grid search to create new deep learning on same data but using only sequence features (no genomic features) to evaluate feature importance.
  
 ```{r, Feature_evaluation}
-library(h2o)
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 8, max_mem_size = "16G")
-kmers = c(1, 1557:1583) ## all features not kmers
 
-train_K = as.h2o(res$train[ ,-kmers])
-valid_K = as.h2o(res$validate[ ,-kmers])
-test_K = as.h2o(res$validate[ ,-kmers])
-
-
-h2o.no_progress()
-
-DNNK = h2o.deeplearning(
-    training_frame=train_K,
-    validation_frame = valid_K,
-    x=1:1555,
-    y=1556,
-    epochs= 2000,
-    stopping_metric="misclassification",
-    stopping_tolerance=1e-3,        
-    stopping_rounds=10,
-    activation = "RectifierWithDropout",
-    hidden = c(64,32,16),
-    input_dropout_ratio = 0.3,
-    l1 = 1e-3,
-    l2 = 1e-5,
-    model_id = "Kmer_model")
-h2o.saveModel(DNNK, "./Data/Models/", force = TRUE)
-h2o.shutdown(FALSE)
 
 ```
 
@@ -381,18 +357,27 @@ h2o.shutdown(FALSE)
 ```{r, model_comparison, fig.height= 7, fig.width= 5}
 library(h2o)
 library(caret)
+logit = readRDS("./Data/Models/Logit.rds")
+gbm = readRDS("./Data/Models/gbm.rds")
 rf = readRDS("./Data/Models/RF.rds")
 SVM = readRDS("./Data/Models/SVM.rds")
 
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "2G")
 DNN = h2o.loadModel("./Data/Models/DeepLncRNA")
-DNNK = h2o.loadModel("./Data/Models/Kmer_model")
+
+
 train_hex = as.h2o(res$train)
 valid_hex = as.h2o(res$validate)
 test_hex = as.h2o(res$test)
 
 
 ## Make plot of validation accuracies
+log_vals = predict(logit, res$validate)
+log_conf = confusionMatrix(log_vals, res$validate$Loc, positive = "Nuclear")
+
+gbm_vals = predict(gbm, res$validate)
+gbm_conf = confusionMatrix(gbm_vals, res$validate$Loc, positive = "Nuclear")
+
 rf_vals = predict(rf, res$validate)
 rf_conf = confusionMatrix(rf_vals, res$validate$Loc, positive = "Nuclear")
 
@@ -409,19 +394,22 @@ GetMets = function(confMat){
   acc = confMat$overall[1]
   spec =  confMat$table[1,1]/(confMat$table[1,1] + confMat$table[2,1])
   sens = confMat$table[2,2]/(confMat$table[2,2] + confMat$table[1,2])
-  mets = c(acc,sens,spec)
-  names(mets) = c("Accuracy","Sensitivity","Specificity")
+  prec = confMat$table[2,2]/(confMat$table[2,2] + confMat$table[2,1])
+  F1 = (2*prec*sens )/ (prec+sens)
+  mets = c(acc,sens,spec,F1)
+  names(mets) = c("Accuracy","Sensitivity","Specificity","F1")
   return(mets)
 }
 
-valid_mets = data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
+valid_mets = data.frame( Log = GetMets(log_conf),GBM = GetMets(gbm_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
   tidyr::gather(valid_mets, Metrics)
-colnames(valid_mets) = c("Metric","Model","Value")
+valid_mets$Metric = rep(c("Accuracy","Sensitivity","Specificity"), 5)
+colnames(valid_mets) = c("Model","Value", "Metric")
 
 ggplot(data = valid_mets, aes(as.factor(Model), Value, fill = Metric) ) +
   geom_bar( stat = "identity", position = "dodge") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim=c(0.65,0.8)) +
+  coord_cartesian(ylim=c(0,1)) +
   xlab("Model") +
   theme_bw() + 
   theme(axis.text=element_text(size=13),
@@ -430,8 +418,9 @@ ggsave("./Figures/Model_Comparison.pdf")
 
 dnn_test = predict(DNN, test_hex)
 rf_test = predict(rf, res$test, "prob")
-svm_test = predict(svm_radial, res$test, "prob")
-dnnk_vals = predict(DNNK, test_hex)
+svm_test = predict(SVM, res$test, "prob")
+gbm_test = predict(gbm, res$test, "prob")
+logit_test = predict(logit, res$test, "prob")
 h2o.shutdown(FALSE)
 
 ```
@@ -442,14 +431,18 @@ h2o.shutdown(FALSE)
 ```{r, ROC, fig.height= 6, fig.width= 6}
 
 
+gbm_roc =pROC::roc(predictor=as.vector(gbm_test$Nuclear),
+                  response=res$test$Loc,
+                  levels=levels(res$test$Loc) )
+
+logit_roc =pROC::roc(predictor=as.vector(logit_test$Nuclear),
+                  response=res$test$Loc,
+                  levels=levels(res$test$Loc) )
 
 dnn_roc = pROC::roc(predictor=as.vector(dnn_test$Nuclear),
                     response=res$test$Loc,
                     levels=levels(res$test$Loc) )
 
-dnnk_roc = pROC::roc(predictor=as.vector(dnnk_test$Nuclear),
-                    response=res$test$Loc,
-                    levels=levels(res$test$Loc) )
 
 plot(dnn_roc, col = "blue", cex.lab = 1.3, cex.axis = 1, lwd=3)
 
@@ -464,29 +457,39 @@ svm_roc = pROC::roc(predictor=as.vector(svm_test$Nuclear),
                      levels=levels(res$test$Loc) )
 plot(svm_roc, add = TRUE, col = "magenta",lty =3, lwd = 3)
 
+plot(logit_roc, add = TRUE, col = "red",lty=4, lwd = 3)
+plot(gbm_roc, add = TRUE, col = "green",lty=5, lwd = 3)
 
-legend(0.35, 0.25, legend=c("DNN", "RF", "SVM","Random Guess"),
-       col=c("blue", "darkorange","magenta","grey"), lty = c(1, 2,3,1), lwd = c(3,3,3,2), cex = 1.2)
+
+legend(0.35, 0.35, legend=c("DNN", "RF", "SVM","Log","GBM", "Random Guess"),
+       col=c("blue", "darkorange","magenta","red","green","grey"), lty = c(1, 2,3,4,5,1), lwd = c(3,3,3,2,2,2), cex = 1.2)
 h2o.shutdown(FALSE)
 ```
 
 ## Test set performance metrics
 
 ```{r, testset_metrics}
+rf_test = predict(rf, res$test)
+svm_test = predict(SVM, res$test)
+gbm_test = predict(gbm, res$test)
+logit_test = predict(logit, res$test)
 
+
+gbm_conf = confusionMatrix(gbm_test, res$test$Loc, positive = "Nuclear")
+logit_conf = confusionMatrix(logit_test, res$test$Loc, positive = "Nuclear")
 rf_conf = confusionMatrix(rf_test, res$test$Loc, positive = "Nuclear")
 svm_conf = confusionMatrix(svm_test, res$test$Loc, positive = "Nuclear")
-dnn_conf = confusionMatrix(as.vector(dnn_test$predict), res$test$Loc, positive = "Nuclear")
-dnnk_conf = confusionMatrix(as.vector(dnnk_vals$predict), res$test$Loc, positive = "Nuclear")
+dnn_conf = confusionMatrix(as.factor(as.vector(dnn_test$predict)), res$test$Loc, positive = "Nuclear")
 
-test_mets = data.frame(t(data.frame(RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(Dnn_conf), DNNK = GetMets(dnnk_conf)) ))
-test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc, dnnk_roc$auc)
+test_mets = data.frame(t(data.frame(GBM = GetMets(gbm_conf), Log = GetMets(log_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(dnn_conf)) ))
+test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc, gbm_roc$auc, logit_roc$auc)
 
-rf_mcc = mltools::mcc(preds = as.numeric(rf_test)-1, actuals = as.numeric(res$test$Loc)-1)
+gbm_mcc = mltools::mcc(preds = as.numeric(gbm_test)-1, actuals = as.numeric(res$test$Loc)-1)
+logit_mcc = mltools::mcc(preds = as.numeric(logit_test)-1, actuals = as.numeric(res$test$Loc)-1)
 svm_mcc = mltools::mcc(preds = as.numeric(svm_test)-1, actuals = as.numeric(res$test$Loc)-1)
-dnn_mcc = mltools::mcc(preds = as.numeric(as.factor(as.vector(DNN_test$predict)))-1, actuals = as.numeric(res$test$Loc)-1)
+dnn_mcc = mltools::mcc(preds = as.numeric(as.factor(as.vector(dnn_test$predict)))-1, actuals = as.numeric(res$test$Loc)-1)
 
-test_mets$MCC = c(rf_mcc, svm_mcc, dnn_mcc)
+test_mets$MCC = c(gbm_mcc, logit_mcc, rf_mcc, svm_mcc, dnn_mcc)
 write.csv(round(test_mets, 3), "./Data/test_metrics.csv")
 
 ```
