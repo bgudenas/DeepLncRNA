@@ -88,7 +88,7 @@ for ( i in unique(s2c$cell)){
 
 plot_pca(so, color_by = "condition",  text_labels = TRUE) + xlab(paste("PC1","%Var =", round(lds$data[1,2],2))) + ylab(paste("PC2","Var =", round(lds$data[2,2],2)))
   
-## if more than 1  RNA-seq library protocols were used account for covariate
+## if more than 1  RNA-seq library protocols were used account for Lib covariate
 if (length(unique(s2c_tmp$Lib))  > 1 ) {
     
     so <- sleuth_fit(so, ~ Lib + condition, 'full')
@@ -254,9 +254,10 @@ saveRDS(res, "./Data/Training_frames.rds")
 ## Deep Learning
 
 ```{r, DNN, eval = FALSE}
+##Run on cluster
 res = readRDS("./Data/Training_frames.rds")
 library(h2o)
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 8, max_mem_size = "16G")
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 24, max_mem_size = "48G")
 train_hex = as.h2o(res$train[ ,-1])
 valid_hex = as.h2o(res$validate[ ,-1])
 test_hex = as.h2o(res$validate[ ,-1])
@@ -278,7 +279,7 @@ search_criteria = list(strategy = "RandomDiscrete", max_models = 800, seed=54321
     validation_frame = valid_hex,
     x=1:1582,
     y=1583,
-    epochs= 100,
+    epochs= 400,
     stopping_metric="misclassification",
     stopping_tolerance=1e-2,        
     stopping_rounds=5,
@@ -297,7 +298,7 @@ h2o.shutdown(FALSE)
   
 ```
 
-
+##Create Models for comparison
 
 ```{r, model_building}
 library(randomForest)
@@ -346,7 +347,8 @@ saveRDS(logit, "./Data/Models/Logit.rds")
 saveRDS(svm_radial, "./Data/Models/SVM.rds")
 saveRDS(rf, "./Data/Models/RF.rds")
 ```
-Use paramaters found in grid search to create new deep learning on same data but using only sequence features (no genomic features) to evaluate feature importance.
+
+
  
 ```{r, Feature_evaluation}
 
@@ -391,7 +393,7 @@ DNN_conf = confusionMatrix(as.factor(as.vector(DNN_vals$predict)), res$validate$
 
 
 GetMets = function(confMat){
-  ## get acc, sens, spec from caret confusion matrix
+  ## get acc, sens, spec, F1 from caret confusion matrix
   acc = confMat$overall[1]
   spec =  confMat$table[1,1]/(confMat$table[1,1] + confMat$table[2,1])
   sens = confMat$table[2,2]/(confMat$table[2,2] + confMat$table[1,2])
@@ -404,7 +406,7 @@ GetMets = function(confMat){
 
 valid_mets = data.frame( Log = GetMets(log_conf),GBM = GetMets(gbm_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
   tidyr::gather(valid_mets, Metrics)
-valid_mets$Metric = rep(c("Accuracy","Sensitivity","Specificity"), 5)
+valid_mets$Metric = rep(c("Accuracy","Sensitivity","Specificity","F1"), 5)
 colnames(valid_mets) = c("Model","Value", "Metric")
 
 ggplot(data = valid_mets, aes(as.factor(Model), Value, fill = Metric) ) +
@@ -459,7 +461,7 @@ svm_roc = pROC::roc(predictor=as.vector(svm_test$Nuclear),
 plot(svm_roc, add = TRUE, col = "magenta",lty =3, lwd = 3)
 
 plot(logit_roc, add = TRUE, col = "red",lty=4, lwd = 3)
-plot(gbm_roc, add = TRUE, col = "green",lty=5, lwd = 3)
+plot(gbm_roc, add = TRUE, col = "darkgreen",lty=5, lwd = 3)
 
 
 legend(0.35, 0.35, legend=c("DNN", "RF", "SVM","Log","GBM", "Random Guess"),
