@@ -232,7 +232,7 @@ dim(df)
 table(df$Loc)
 
 
-set.seed(54321)
+set.seed(4321)
 spec = c(train = .7, test = .15, validate = .15)
 
 g = sample(cut(
