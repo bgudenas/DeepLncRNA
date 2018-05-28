@@ -230,7 +230,7 @@ df$Loc[df$l2fc < 0] = "Cytosol"
 df$Loc = as.factor(df$Loc)
 dim(df)
 table(df$Loc)
-
+write.csv(df, "./Data/LncRNA_dataset.csv")
 
 set.seed(4321)
 spec = c(train = .7, test = .15, validate = .15)
@@ -264,7 +264,7 @@ test_hex = as.h2o(res$validate[ ,-1])
 
 hyper_params <- list(
   activation=c("RectifierWithDropout"),
-  hidden =list( c(500,250,125), c(256, 128,64) c(128,64,32), c(64,32,16), ),
+  hidden =list( c(500,250,125), c(256, 128,64) c(128,64,32), c(64,32,16), c(32,16,8) ),
                 input_dropout_ratio=c(0, 0.1, 0.2, 0.3, 0.4),
                 l1 = c(1e-5, 1e-4, 1e-3, 0),
                 l2 = c(1e-5, 1e-4, 1e-3, 0)
@@ -300,7 +300,7 @@ h2o.shutdown(FALSE)
 
 ##Create Models for comparison
 
-```{r, model_building}
+```{r, model_building, eval = FALSE}
 library(randomForest)
 library(doParallel)
 library(caret)
@@ -351,8 +351,38 @@ saveRDS(rf, "./Data/Models/RF.rds")
 
  
 ```{r, Feature_evaluation}
+DNN
 
+feats = DNN@model$variable_importances
 
+map = match( feats$variable, colnames(df))
+feats$index = map
+feats = feats[order(feats$index), ]
+
+## Find indexs of feature sets
+## subtract one since we are removing L2FC
+kmers = c(4:1363)-1
+RBPs = c(1364:1556)-1
+genomic = c(2,3,1557:1583)-1
+
+## Check for all features
+length(c(kmers,RBPs,genomic)) == nrow(feats)
+
+ksum = sum(feats$relative_importance[kmers])/length(kmers)
+rsum = sum(feats$relative_importance[RBPs])/length(RBPs)
+gsum = sum(feats$relative_importance[genomic])/length(genomic)
+
+feats = feats[order(feats$relative_importance, decreasing = TRUE), ]
+feats[1,6] = ksum
+feats[1,7] = rsum
+feats[1,8] = gsum
+colnames(feats)[6:8] = c("Normalized_Kmer_Sum", "Normalized_RBP_Sum", "Normalized_Genomic_Sum")
+
+feats[1,9] = sum(feats$percentage[kmers])*100
+feats[1,10] = sum(feats$percentage[RBPs])*100
+feats[1,11] = sum(feats$percentage[genomic])*100
+colnames(feats)[9:11] = c("Percent_Kmer_Sum", "Percent_RBP_Sum", "Percent_Genomic_Sum")
+write.csv(feats, "./Data/variable_importance.csv")
 ```
 
  ## Machine learning model comparison on validation set
@@ -384,7 +414,7 @@ gbm_conf = confusionMatrix(gbm_vals, res$validate$Loc, positive = "Nuclear")
 rf_vals = predict(rf, res$validate)
 rf_conf = confusionMatrix(rf_vals, res$validate$Loc, positive = "Nuclear")
 
-svm_vals = predict(SVM, res$validate)
+svm_vals = predict(SVM, res$validate, type = "prob")
 svm_conf = confusionMatrix(svm_vals, res$validate$Loc, positive = "Nuclear")
 
 DNN_vals = predict(DNN, valid_hex)
@@ -412,27 +442,25 @@ colnames(valid_mets) = c("Model","Value", "Metric")
 ggplot(data = valid_mets, aes(as.factor(Model), Value, fill = Metric) ) +
   geom_bar( stat = "identity", position = "dodge") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim=c(0,1)) +
+  coord_cartesian(ylim=c(0.5,1)) +
   xlab("Model") +
   theme_bw() + 
   theme(axis.text=element_text(size=13),
   axis.title=element_text(size=14,face="bold"), legend.title = element_text(size=12,face="bold"))
 ggsave("./Figures/Model_Comparison.pdf")
 
-dnn_test = predict(DNN, test_hex)
+dnn_test = as.data.frame(predict(DNN, test_hex))
 rf_test = predict(rf, res$test, "prob")
 svm_test = predict(SVM, res$test, "prob")
 gbm_test = predict(gbm, res$test, "prob")
 logit_test = predict(logit, res$test, "prob")
 h2o.shutdown(FALSE)
-
 ```
 
 
 ## Model evalutation on test set
 
 ```{r, ROC, fig.height= 6, fig.width= 6}
-
 
 gbm_roc =pROC::roc(predictor=as.vector(gbm_test$Nuclear),
                   response=res$test$Loc,
@@ -489,6 +517,7 @@ test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc, gbm_roc$auc, logit_roc$a
 
 gbm_mcc = mltools::mcc(preds = as.numeric(gbm_test)-1, actuals = as.numeric(res$test$Loc)-1)
 logit_mcc = mltools::mcc(preds = as.numeric(logit_test)-1, actuals = as.numeric(res$test$Loc)-1)
+rf_mcc = mltools::mcc(preds = as.numeric(rf_test)-1, actuals = as.numeric(res$test$Loc)-1)
 svm_mcc = mltools::mcc(preds = as.numeric(svm_test)-1, actuals = as.numeric(res$test$Loc)-1)
 dnn_mcc = mltools::mcc(preds = as.numeric(as.factor(as.vector(dnn_test$predict)))-1, actuals = as.numeric(res$test$Loc)-1)
 
@@ -598,7 +627,7 @@ trans = rbind(transM, trans, c("BORG","BORG","lincRNA"))
 res$validate = res$validate[is.na(match(rownames(res$validate), trans$ensembl_transcript_id)), ]
 
 library(h2o)
-localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = -1, max_mem_size = "15G")
+localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 2, max_mem_size = "8G")
 h2o.no_progress()
 train_hex = as.h2o(res$train[ ,-1])
 valid_hex = as.h2o(res$validate[ ,-1])
@@ -613,10 +642,10 @@ DNN = h2o.deeplearning(
     stopping_tolerance=1e-3,        
     stopping_rounds=10,
     activation = "RectifierWithDropout",
-    hidden = c(64,32,16),
-    input_dropout_ratio = 0.3,
-    l1 = 1e-3,
-    l2 = 1e-5)
+    hidden = c(32,16,8),
+    input_dropout_ratio = 0.4,
+    l1 = 1e-5,
+    l2 = 1e-4)
 
 preds = predict(DNN, as.h2o(df))
 preds = as.data.frame(preds)
