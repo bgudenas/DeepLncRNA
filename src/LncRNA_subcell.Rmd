@@ -292,6 +292,7 @@ best_model <- h2o.getModel(grid@model_ids[[1]])
 best_model
  
 h2o.saveModel(best_model, path="./Data/Models/", force=TRUE)
+file.rename(paste0("./Data/Models/", best_model@model_id), "./Data/Models/DeepLncRNA")
 h2o.shutdown(FALSE)
   
 ```
