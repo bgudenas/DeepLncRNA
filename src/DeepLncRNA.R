@@ -124,7 +124,7 @@ FeatureExtract = function(map){
 DeepLncRNA = function(df){
   library(h2o)
   localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 1, max_mem_size = "1G")
-  DNN = h2o.loadModel("./Data/Models/dlgrid_model_483")
+  DNN = h2o.loadModel("./Data/Models/DeepLncRNA")
   pred_hex = as.h2o(df)
   vals = as.data.frame(predict(DNN, pred_hex, "probs"))
   rownames(vals) = df$ensembl_transcript_id
