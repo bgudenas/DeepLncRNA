@@ -86,6 +86,11 @@ for (i in 1:nrow(master)){
     
 
 source("./src/DeepLncRNA.R")
-lncs = FeatureExtract()
+lncs = FeatureExtract(master)
 
-preds = DeepLncRNA(lnccyto, lnccyto$IDs)
+## Remove any lncRNAs present in training or validation data
+filt = is.na(match(master$IDs, c(rownames(res$train), rownames(res$validate) )) )
+lncs = lncs[filt, ]
+preds = DeepLncRNA(lncs, lncs$IDs)
+
+caret::confusionMatrix(data = preds$predict, reference = as.factor(master$Loc[filt]), positive = "Nuclear")
