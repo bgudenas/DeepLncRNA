@@ -568,7 +568,7 @@ dev.off()
 ## Genomic predictions
 
 ```{r, genomic_analysis, warning = FALSE}
-Gtrans = GetSeq(annots$transcript_id, mart)
+Gtrans = GetSeq(unlist(annots$transcript_id), mart)
 Gtrans = Gtrans[is.na(match(Gtrans$ensembl_transcript_id, rownames(res$train))), ]
 Gdf = FeatureExtract(Gtrans)
 preds = DeepLncRNA(Gdf)    
@@ -647,8 +647,8 @@ res$validate = res$validate[is.na(match(rownames(res$validate), trans$ensembl_tr
 library(h2o)
 localH2O = h2o.init(ip="localhost", port = 54321, startH2O = TRUE, nthreads = 2, max_mem_size = "8G")
 h2o.no_progress()
-train_hex = as.h2o(res$train[ ,-1])
-valid_hex = as.h2o(res$validate[ ,-1])
+train_hex = as.h2o(rbind(res$train[ ,-1], res$validate[ ,-1]))
+
 
 DNN = h2o.deeplearning(
     training_frame=train_hex,
@@ -703,6 +703,121 @@ ggsave("./Figures/annotated_lncRNAs.pdf", width = 5, height = 7, units = "in")
 
 ```
 
+```{r, LncLocator_comparison}
+
+# Parse LncRNAs from LncLocator -------------------------------------------
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("seqinr")
+
+library(stringr)
+library(seqinr)
+library(Biostrings)
+cyto = read.fasta("./Data/LncLocator/Cytosol", as.string = TRUE)
+nuc = read.fasta("./Data/LncLocator/Nucleus", as.string = TRUE)
+seqs =c( nuc, cyto)
+nucnames = unlist(getAnnot(nuc))
+cytonames = unlist(getAnnot(cyto))
+
+allnames = c(nucnames, cytonames)
+NRs = grep( "NR_*", allnames)
+refseq = str_extract( allnames[NRs], "NR_\\d*") ##get Refseq IDs
+refseq2 = str_extract( allnames, "NM_\\d*") ##get Refseq IDs
+refseq2 = refseq2[!is.na(refseq2)]
+
+ensem= str_extract( allnames, "ENST\\d*") ##get Ensembl IDs
+ensem = ensem[!is.na(ensem)]
+
+fullnames = c(refseq, refseq2, ensem)
+
+## Get transcript biotype and chromosome if available
+mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map = biomaRt::getBM(mart = mart, attributes = c( "gene_biotype","refseq_ncrna", "chromosome_name"), filters = "refseq_ncrna", values = refseq)
+mapNM = biomaRt::getBM(mart = mart, attributes = c( "gene_biotype","refseq_ncrna", "chromosome_name"), filters = "refseq_mrna", values = refseq2)
+map2 = biomaRt::getBM(mart = mart, attributes = c( "gene_biotype","ensembl_transcript_id" ,"chromosome_name"), filters = "ensembl_transcript_id", values = ensem)
+colnames(map)= c("gene_biotype","ID", "chromosome_name")
+colnames(mapNM)= c("gene_biotype","ID", "chromosome_name")
+colnames(map2)= c("gene_biotype","ID", "chromosome_name")
+maps = rbind(map, mapNM, map2)
+maps = maps[nchar(maps$chromosome_name) <3, ]
+maps = maps[!is.na(maps$ID), ]
+
+#Loop through to make DF
+fullnames = data.frame("IDs" = c(refseq, refseq2, ensem), transcript_biotype = "", chromosome_name = "",GC_content= 0, cdna = "", stringsAsFactors = FALSE)
+for (i in 1:nrow(fullnames)){
+  
+    bio = maps$gene_biotype[maps$ID == fullnames$IDs[i]]
+        if (length(bio) != 0 ){ 
+            fullnames$transcript_biotype[i] = bio 
+        } else {fullnames$transcript_biotype[i] = NA}
+    
+    chrom = maps$chromosome_name[maps$ID == fullnames$IDs[i]]
+        if (length(chrom) != 0 ){
+            fullnames$chromosome[i] =  chrom 
+            } else {fullnames$transcript_biotype[i] = NA}
+
+    fullnames$cdna[i] = toupper(as.character(seqs[grepl(fullnames$IDs[i], allnames)]))
+    fullnames$GC_content[i] = sum(oligonucleotideFrequency(DNAString(fullnames$cdna[i]), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(fullnames$cdna[i]), 1))
+}
+fullnames$transcript_length = as.numeric(lapply(fullnames$cdna, nchar))
+fullnames = fullnames[ ,colnames(fullnames)!= "chromosome"]
+
+
+allseqs = data.frame("IDs" = c(allnames), transcript_biotype = "", chromosome_name = "",GC_content= 0, cdna = "", stringsAsFactors = FALSE)
+for (i in 1:nrow(allseqs)) {
+    allseqs$IDs[i] = allnames[i]
+    allseqs$cdna[i] = toupper(as.character(seqs[allseqs$IDs[i] == allnames]))
+    allseqs$GC_content[i] = sum(oligonucleotideFrequency(DNAString(allseqs$cdna[i]), 1)[c(2,3)])/ sum(oligonucleotideFrequency(DNAString(allseqs$cdna[i]), 1))
+}
+allseqs$transcript_length = as.numeric(lapply(allseqs$cdna, nchar))
+
+## FIlter out seqs from allseqs for which we got genomic features
+for(i in fullnames$IDs){
+    allseqs = allseqs[!grepl(i, allseqs$IDs), ]
+}
+
+master = rbind(fullnames, allseqs)
+
+master$Loc = ""
+for (i in 1:nrow(master)){
+    ID = master$IDs[i]
+    if (sum(grepl(ID, cytonames)) == 1 ){master$Loc[i] = "Cytosol"
+        }else if (sum(grepl(ID, nucnames)) == 1 ){master$Loc[i] = "Nuclear"
+            }else if (sum(ID == nucnames)==1) { master$Loc[i] = "Nuclear"
+                }else if (sum(ID == cytonames)==1) { master$Loc[i] = "Cytosol" }
+}
+    
+filt = is.na(match(master$IDs, c(rownames(res$train), rownames(res$validate) )) )
+master = master[filt, ]
+
+source("./src/DeepLncRNA.R")
+lncs = FeatureExtract(master)
+lncs$Loc
+## Remove any lncRNAs present in training or validation data
+
+preds = DeepLncRNA(lncs, lncs$IDs)
+
+confMat = caret::confusionMatrix(data = preds$predict, reference = as.factor(master$Loc), positive = "Nuclear")
+##Lnclocator values from -- Cao, et al 2018 (Fig 7)
+df = data.frame("DeepLncRNA" = c(spec, sens), "LncLocator" = c( .47, .38), "Metric" = c("Specificity","Sensitivity"))
+spec = confMat$table[1,1]/(confMat$table[1,1] + confMat$table[2,1])
+sens = confMat$table[2,2]/(confMat$table[2,2] + confMat$table[1,2])
+
+df = melt(df, "Metric")
+ggplot(data = df,  aes(x = as.factor(variable), value , fill = Metric)) +
+    geom_bar(stat="identity", position = "dodge") +
+    theme_bw() +
+    theme(axis.text.x=element_text( size = 14)) +
+    theme(axis.text.y=element_text( size = 14) ) +
+    xlab("") +
+    ylab("") +
+    theme(legend.text=element_text(size=15))
+ggsave("./Figures/Lnclocator.pdf")
+
+sink("./Data/LncLocator_conf.txt")
+print(confMat)
+sink()
+
+```
 
 
 
