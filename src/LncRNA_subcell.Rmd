@@ -844,7 +844,7 @@ ggplot(medL, aes(x = Name, value, fill = as.factor(variable))) +
 ggsave("./Figures/annotated_lncRNAs.pdf", width = 5, height = 7, units = "in")
 
 ```
-
+## LncLocator comparison
 ```{r, LncLocator_comparison}
 
 # Parse LncRNAs from LncLocator -------------------------------------------
