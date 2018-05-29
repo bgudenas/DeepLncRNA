@@ -8,7 +8,7 @@ library(seqinr)
 library(Biostrings)
 cyto = read.fasta("./Data/LncLocator/Cytosol", as.string = TRUE)
 nuc = read.fasta("./Data/LncLocator/Nucleus", as.string = TRUE)
-seqs =c(cyto, nuc)
+seqs =c( nuc, cyto)
 nucnames = unlist(getAnnot(nuc))
 cytonames = unlist(getAnnot(cyto))
 
