@@ -203,7 +203,6 @@ h = hist(df$l2fc )
 cuts <- cut(h$breaks, c(-Inf,-1,2.8,Inf))
 
 plot(h, col = c("blue","white","red")[cuts], xlim = range(-7, 7), xlab = expression("Log"[2]* " Fold-Change"), main = "", cex.lab = 1.2)
-abline(v = median(df$l2fc), col = "grey", lwd = 2)
 
 cyto = sum(df$l2fc < 0)
 nuc = sum(df$l2fc > 2.8)
@@ -382,7 +381,7 @@ feats[1,9] = sum(feats$percentage[kmers])*100
 feats[1,10] = sum(feats$percentage[RBPs])*100
 feats[1,11] = sum(feats$percentage[genomic])*100
 colnames(feats)[9:11] = c("Percent_Kmer_Sum", "Percent_RBP_Sum", "Percent_Genomic_Sum")
-write.csv(feats, "./Data/variable_importance.csv")
+write.csv(feats, "./Data/feature_importance.csv")
 ```
 
  ## Machine learning model comparison on validation set
@@ -414,11 +413,11 @@ gbm_conf = confusionMatrix(gbm_vals, res$validate$Loc, positive = "Nuclear")
 rf_vals = predict(rf, res$validate)
 rf_conf = confusionMatrix(rf_vals, res$validate$Loc, positive = "Nuclear")
 
-svm_vals = predict(SVM, res$validate, type = "prob")
+svm_vals = predict(SVM, res$validate)
 svm_conf = confusionMatrix(svm_vals, res$validate$Loc, positive = "Nuclear")
 
-DNN_vals = predict(DNN, valid_hex)
-DNN_conf = confusionMatrix(as.factor(as.vector(DNN_vals$predict)), res$validate$Loc, positive = "Nuclear")
+DNN_conf = h2o.confusionMatrix(DNN@model$validation_metrics)
+DNN_conf$overall = (DNN_conf[1,1]+DNN_conf[2,2])/1302
 
 
 
@@ -434,7 +433,22 @@ GetMets = function(confMat){
   return(mets)
 }
 
-valid_mets = data.frame( Log = GetMets(log_conf),GBM = GetMets(gbm_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = GetMets(DNN_conf), Metrics = names(GetMets(DNN_conf))) %>% 
+
+h2oGetMets = function(confMat){
+  ##h2o confmat has axis flipped
+  acc = (DNN_conf[1,1]+DNN_conf[2,2])/1302
+  spec =  confMat[1,1]/(confMat[1,1] + confMat[1,2])
+  sens = confMat[2,2]/(confMat[2,2] + confMat[2,1])
+  
+  reca = confMat[2,2]/(confMat[2,2] + confMat[1,2])
+  prec = confMat[2,2]/(confMat[2,2] + confMat[2,1])
+  F1 = (2*prec*reca )/ (prec+reca)
+  mets = c(acc,sens,spec,F1)
+  names(mets) = c("Accuracy","Sensitivity","Specificity","F1")
+  return(mets)
+}
+
+valid_mets = data.frame( Log = GetMets(log_conf),GBM = GetMets(gbm_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DeepLncRNA = h2oGetMets(DNN_conf), Metrics = names(GetMets(rf_conf))) %>% 
   tidyr::gather(valid_mets, Metrics)
 valid_mets$Metric = rep(c("Accuracy","Sensitivity","Specificity","F1"), 5)
 colnames(valid_mets) = c("Model","Value", "Metric")
@@ -454,7 +468,7 @@ rf_test = predict(rf, res$test, "prob")
 svm_test = predict(SVM, res$test, "prob")
 gbm_test = predict(gbm, res$test, "prob")
 logit_test = predict(logit, res$test, "prob")
-h2o.shutdown(FALSE)
+
 ```
 
 
@@ -474,7 +488,7 @@ dnn_roc = pROC::roc(predictor=as.vector(dnn_test$Nuclear),
                     response=res$test$Loc,
                     levels=levels(res$test$Loc) )
 
-
+pdf("./Figures/AUROC.pdf")
 plot(dnn_roc, col = "blue", cex.lab = 1.3, cex.axis = 1, lwd=3)
 
 rf_roc =pROC::roc(predictor=as.vector(rf_test$Nuclear),
@@ -494,7 +508,7 @@ plot(gbm_roc, add = TRUE, col = "darkgreen",lty=5, lwd = 3)
 
 legend(0.35, 0.35, legend=c("DNN", "RF", "SVM","Log","GBM", "Random Guess"),
        col=c("blue", "darkorange","magenta","red","green","grey"), lty = c(1, 2,3,4,5,1), lwd = c(3,3,3,2,2,2), cex = 1.2)
-h2o.shutdown(FALSE)
+dev.off()
 ```
 
 ## Test set performance metrics
@@ -510,10 +524,12 @@ gbm_conf = confusionMatrix(gbm_test, res$test$Loc, positive = "Nuclear")
 logit_conf = confusionMatrix(logit_test, res$test$Loc, positive = "Nuclear")
 rf_conf = confusionMatrix(rf_test, res$test$Loc, positive = "Nuclear")
 svm_conf = confusionMatrix(svm_test, res$test$Loc, positive = "Nuclear")
-dnn_conf = confusionMatrix(as.factor(as.vector(dnn_test$predict)), res$test$Loc, positive = "Nuclear")
 
-test_mets = data.frame(t(data.frame(GBM = GetMets(gbm_conf), Log = GetMets(log_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = GetMets(dnn_conf)) ))
-test_mets$AUC = c(rf_roc$auc, svm_roc$auc, dnn_roc$auc, gbm_roc$auc, logit_roc$auc)
+DNN_conf = h2o.confusionMatrix(h2o.performance(DNN, test_hex))
+DNN_conf$overall = (DNN_conf[1,1]+DNN_conf[2,2])/nrow(res$test)
+
+test_mets = data.frame(t(data.frame(GBM = GetMets(gbm_conf), Log = GetMets(log_conf), RF = GetMets(rf_conf), SVM = GetMets(svm_conf), DNN = h2oGetMets(DNN_conf)) ))
+test_mets$AUC = c( gbm_roc$auc, logit_roc$auc, rf_roc$auc, svm_roc$auc, dnn_roc$auc)
 
 gbm_mcc = mltools::mcc(preds = as.numeric(gbm_test)-1, actuals = as.numeric(res$test$Loc)-1)
 logit_mcc = mltools::mcc(preds = as.numeric(logit_test)-1, actuals = as.numeric(res$test$Loc)-1)
@@ -542,7 +558,9 @@ div_cols = div_cols[c(1,2,3,7,8,10,11)]
 
 mat2 = mat2[order(rowMeans(mat2, na.rm = TRUE), decreasing = TRUE), ]
 
+pdf("./Figures/lncRNA_heatmap.pdf")
 pheatmap(mat2, cluster_rows = FALSE , cluster_cols = TRUE, labels_row = "", breaks = mat_breaks, color = div_cols, legend_breaks = c(-3, -1,0, 1, 3,5, max(mat2, na.rm = TRUE)), legend_labels = c(-3, -1, 0, 1, 3,5, "L2FC\n"), cex = 1.2 ) 
+dev.off()
 
 ```
 
