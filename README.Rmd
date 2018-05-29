@@ -15,6 +15,7 @@ DeepLncRNA is a deep learning model which predicts nuclear or cytosolic localiza
 
 ## Dependencies
 ```{r , eval = FALSE}
+## DeepLncRNA was built using h2o version h2o_3.18.0.11
 install.packages(c("dplyr","h2o"))
 source("https://bioconductor.org/biocLite.R")
 biocLite(c("Biostrings","biomaRt"))
@@ -29,7 +30,7 @@ mart = biomaRt::useMart("ensembl","hsapiens_gene_ensembl")
 trans = Gene2Transcript(IDs, mart)
 seqs = GetSeq(trans$ensembl_transcript_id, mart)
 df = FeatureExtract(seqs)
-preds = DeepLncRNA(df)
+preds = DeepLncRNA(df, df$ensembl_transcript_id)
 
 preds$gene = trans$ensembl_gene_id[match(rownames(preds), trans$ensembl_transcript_id)]
 preds

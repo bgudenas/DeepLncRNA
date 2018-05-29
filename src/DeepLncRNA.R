@@ -1,7 +1,4 @@
 # DeepLncRNA.R -------------------------------------------------------------
-# Brian Gudenas
-# 2/15/18
-
 
 Gene2Transcript = function(Ensembl_gene_IDs , mart ){
     # Extract all transcripts for a list of ensembl gene IDs
@@ -9,7 +6,6 @@ Gene2Transcript = function(Ensembl_gene_IDs , mart ){
     map = biomaRt::getBM(mart = mart, attributes = c("ensembl_gene_id", "ensembl_transcript_id","transcript_biotype"), filters = "ensembl_gene_id", values = Ensembl_gene_IDs)
     return(map)
 }
-
 
 
 GetSeq = function(Ensembl_transcript_IDs, mart){
