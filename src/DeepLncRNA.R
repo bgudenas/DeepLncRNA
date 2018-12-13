@@ -133,5 +133,5 @@ DeepLncRNA = function(df, IDs){
 # trans = Gene2Transcript(c("ENSG00000229807", "ENSG00000228630"))
 # lncRNAs = GetSeq(trans$ensembl_transcript_id)
 # df = FeatureExtract(lncRNAs)
-# preds = DeepLocal(df)    
+# preds = DeepLncRNA(df)    
 
