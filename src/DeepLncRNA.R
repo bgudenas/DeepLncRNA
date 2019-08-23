@@ -1,6 +1,6 @@
 # DeepLncRNA.R -------------------------------------------------------------
 
-Gene2Transcript = function(Ensembl_gene_IDs , mart ){
+Gene2Transcript = function(Ensembl_gene_IDs , mart){
     # Extract all transcripts for a list of ensembl gene IDs
   #mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
     map = biomaRt::getBM(mart = mart, attributes = c("ensembl_gene_id", "ensembl_transcript_id","transcript_biotype"), filters = "ensembl_gene_id", values = Ensembl_gene_IDs)
@@ -8,12 +8,18 @@ Gene2Transcript = function(Ensembl_gene_IDs , mart ){
 }
 
 
-GetSeq = function(Ensembl_transcript_IDs, mart){
+GetSeq = function(Ensembl_transcript_IDs, mart, versioned=FALSE){
     ## Uses transcript_Ids to extract, biotype, chromosome, cDNA sequence, transcript_length, GC %
     library(Biostrings)
     #mart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-    map = biomaRt::getBM(mart = mart, attributes = c( "ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = Ensembl_transcript_IDs)
-    seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+    if(versioned == TRUE) {
+      map = biomaRt::getBM(mart = mart, attributes = c( "ensembl_transcript_id_version","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id_version", values = Ensembl_transcript_IDs)
+      colnames(map)[1] <- "ensembl_transcript_id"
+      seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id_version", seqType = "cdna", mart = mart)
+    } else {
+      map = biomaRt::getBM(mart = mart, attributes = c( "ensembl_transcript_id","transcript_biotype", "chromosome_name"), filters = "ensembl_transcript_id", values = Ensembl_transcript_IDs)
+      seq = biomaRt::getSequence(id = map$ensembl_transcript_id, type="ensembl_transcript_id", seqType = "cdna", mart = mart)
+    }
     map$cdna = seq$cdna[match(map$ensembl_transcript_id, seq$ensembl_transcript_id)]
     
     map$transcript_length = as.numeric(lapply(map$cdna, nchar))
