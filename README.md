@@ -16,7 +16,10 @@ DeepLncRNA is a deep learning model which predicts nuclear or cytosolic localiza
 ## Dependencies
 ```{r , eval = FALSE}
 ## DeepLncRNA was built using h2o version h2o_3.18.0.11
-install.packages(c("dplyr","h2o"))
+## H2o models require you are running the same version therefore you will need to install the archived version
+install.packages("https://cran.r-project.org/src/contrib/Archive/h2o/h2o_3.18.0.11.tar.gz", repos=NULL, type="source")
+
+install.packages("dplyr")
 source("https://bioconductor.org/biocLite.R")
 biocLite(c("Biostrings","biomaRt"))
 ```
